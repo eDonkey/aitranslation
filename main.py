@@ -11,7 +11,9 @@ from pydantic import BaseModel
 from enum import Enum
 import uvicorn
 import os
+from dotenv import load_dotenv
 
+load_dotenv()
 
 app = FastAPI()
 app.mount("/static", StaticFiles(directory="static"), name="static")
@@ -20,8 +22,7 @@ templates = Jinja2Templates(directory="templates")
 # Database Configuration
 DATABASE_URL = os.getenv(
     "DATABASE_URL",
-    "postgres://u9vtpvl0p3bo57:p8a3394ca003ac09a6d33d10136b1a9322e1e88e9d5837b89ece29192dbc0d2e5@cf980tnnkgv1bp.cluster-czrs8kj4isg7.us-east-1.rds.amazonaws.com:5432/dblv81pilc1dsu"
-    #"postgresql://postgres:Aj0jwttg88!@localhost:5432/trans25"
+    f"postgresql://{os.getenv('DB_USER', 'default_user')}:{os.getenv('DB_PASSWORD', 'default_password')}@{os.getenv('DB_HOST', 'localhost')}:{os.getenv('DB_PORT', '5432')}/{os.getenv('DB_NAME', 'default_db')}"
 )
 
 # If using Heroku, modify the URL as Heroku provides it with 'postgres://' instead of 'postgresql://'
