@@ -12,12 +12,14 @@ from enum import Enum
 import uvicorn
 import os
 from dotenv import load_dotenv
+import openai
+
+openai.api_key = os.getenv("OPENAI_API_KEY")
 
 load_dotenv()
 
 app = FastAPI()
-app.mount("/static", StaticFiles(directory="static"), name="static")
-templates = Jinja2Templates(directory="templates")
+
 
 # Database Configuration
 DATABASE_URL = os.getenv(
@@ -85,26 +87,6 @@ class TextRequest(BaseModel):
     text: str
     language: Language
 
-@app.get("/", response_class=HTMLResponse)
-async def index(request: Request):
-    print('Request for index page received')
-    return templates.TemplateResponse('index.html', {"request": request})
-
-@app.get('/favicon.ico')
-async def favicon():
-    file_name = 'favicon.ico'
-    file_path = './static/' + file_name
-    return FileResponse(path=file_path, headers={'mimetype': 'image/vnd.microsoft.icon'})
-
-@app.post('/hello', response_class=HTMLResponse)
-async def hello(request: Request, name: str = Form(...)):
-    if name:
-        print('Request for hello page received with name=%s' % name)
-        return templates.TemplateResponse('hello.html', {"request": request, 'name':name})
-    else:
-        print('Request for hello page received with no name or blank name -- redirecting')
-        return RedirectResponse(request.url_for("index"), status_code=status.HTTP_302_FOUND)
-
 @app.post("/save-text/")
 async def save_text(
     request: TextRequest,
@@ -141,6 +123,59 @@ async def get_texts(
 ):
     texts = db.query(TextEntry).all()
     return texts
+
+@app.post("/translate-text/")
+async def translate_text(
+    text: str = Form(...),
+    language: Language = Form(...),
+    target_language: Language = Form(...),
+    db: Session = Depends(get_db),
+    api_key: str = Depends(validate_api_key)
+):
+    try:
+        # Prepare the prompt for GPT
+        prompt = f"Translate this text from {language} to {target_language}:\n{text}"
+        
+        # Call OpenAI API with new format
+        response = openai.chat.completions.create(
+            model="gpt-3.5-turbo",
+            messages=[
+                {"role": "system", "content": "You are a professional translator."},
+                {"role": "user", "content": prompt}
+            ]
+        )
+        
+        translated_text = response.choices[0].message.content
+
+        # Save both original and translated text
+        db_text = TextEntry(
+            apikey_requested=api_key
+        )
+        
+        # Set original text
+        setattr(db_text, language, text)
+        # Set translated text
+        setattr(db_text, target_language, translated_text)
+        
+        db.add(db_text)
+        db.commit()
+        db.refresh(db_text)
+        
+        return {
+            "original_text": text,
+            "translated_text": translated_text,
+            "from_language": language,
+            "to_language": target_language,
+            "id": db_text.id
+        }
+        
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Translation failed: {str(e)}"
+        )
+
+openai.api_key = os.getenv("OPENAI_API_KEY")
 
 if __name__ == '__main__':
     uvicorn.run('main:app', host='0.0.0.0', port=8000)
