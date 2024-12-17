@@ -1,0 +1,194 @@
+{% extends "base.html" %}
+
+{% block title %}Client Dashboard{% endblock %}
+
+{% block content %}
+<div class="row">
+    <div class="col-md-12">
+        <h1>Translation History</h1>
+        
+        <div class="card mb-4">
+            <div class="card-body">
+                <h5 class="card-title">Your API Key</h5>
+                <div class="input-group mb-3">
+                    <input type="text" class="form-control" id="apiKey" placeholder="Enter your API key">
+                    <button class="btn btn-primary" onclick="saveApiKey()">Save</button>
+                </div>
+            </div>
+        </div>
+
+        <div class="card">
+            <div class="card-body">
+                <h5 class="card-title">Translation History</h5>
+                <div class="mb-3">
+                    <div class="btn-group" role="group">
+                        <button type="button" class="btn btn-outline-primary active" onclick="switchView('table')">Table View</button>
+                        <button type="button" class="btn btn-outline-primary" onclick="switchView('json')">JSON View</button>
+                    </div>
+                </div>
+                <div id="tableView">
+                    <div id="translationsList">
+                        Please enter your API key to view translations.
+                    </div>
+                </div>
+                <div id="jsonView" style="display: none;">
+                    <pre id="jsonContent" class="bg-light p-3 rounded" style="max-height: 500px; overflow-y: auto;">
+                    </pre>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+document.addEventListener('DOMContentLoaded', function() {
+    const savedApiKey = localStorage.getItem('clientApiKey');
+    if (savedApiKey) {
+        document.getElementById('apiKey').value = savedApiKey;
+        loadTranslations();
+    }
+});
+
+function saveApiKey() {
+    const apiKey = document.getElementById('apiKey').value;
+    localStorage.setItem('clientApiKey', apiKey);
+    loadTranslations();
+}
+
+let currentTranslations = []; // Store translations data globally
+
+function switchView(viewType) {
+    const tableView = document.getElementById('tableView');
+    const jsonView = document.getElementById('jsonView');
+    const buttons = document.querySelectorAll('.btn-group .btn');
+
+    buttons.forEach(btn => btn.classList.remove('active'));
+    event.target.classList.add('active');
+
+    if (viewType === 'table') {
+        tableView.style.display = 'block';
+        jsonView.style.display = 'none';
+    } else {
+        tableView.style.display = 'none';
+        jsonView.style.display = 'block';
+        // Format and display JSON
+        document.getElementById('jsonContent').textContent = 
+            JSON.stringify(currentTranslations, null, 2);
+    }
+}
+
+async function loadTranslations() {
+    const apiKey = localStorage.getItem('clientApiKey');
+    if (!apiKey) return;
+
+    try {
+        const response = await fetch('/get-texts/', {
+            headers: {
+                'X-API-Key': apiKey
+            }
+        });
+        
+        if (!response.ok) throw new Error('Failed to load translations');
+        
+        const translations = await response.json();
+        currentTranslations = translations; // Store the translations
+        
+        // Update table view
+        const tableHtml = generateTableView(translations);
+        document.getElementById('translationsList').innerHTML = tableHtml;
+        
+        // Update JSON view
+        document.getElementById('jsonContent').textContent = 
+            JSON.stringify(translations, null, 2);
+        
+    } catch (error) {
+        document.getElementById('translationsList').innerHTML = `
+            <div class="alert alert-danger">
+                Error loading translations: ${error.message}
+            </div>
+        `;
+        document.getElementById('jsonContent').textContent = 
+            JSON.stringify({ error: error.message }, null, 2);
+    }
+}
+
+function generateTableView(translations) {
+    if (translations.length === 0) {
+        return '<div class="alert alert-info">No translations found</div>';
+    }
+
+    return `
+        <div class="table-responsive">
+            <table class="table">
+                <thead>
+                    <tr>
+                        <th>ID</th>
+                        <th>Original Text</th>
+                        <th>Translations</th>
+                        <th>Created At</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    ${translations.map(entry => `
+                        <tr>
+                            <td>${entry.id}</td>
+                            <td>${getOriginalText(entry)}</td>
+                            <td>${getTranslations(entry)}</td>
+                            <td>${new Date(entry.created_at).toLocaleString()}</td>
+                        </tr>
+                    `).join('')}
+                </tbody>
+            </table>
+        </div>
+    `;
+}
+
+function getOriginalText(entry) {
+    const languages = ['english', 'spanish', 'portuguese', 'french', 'deutch', 'italian'];
+    for (const lang of languages) {
+        if (entry[lang]) {
+            return `<strong>${lang}:</strong> ${escapeHtml(entry[lang])}`;
+        }
+    }
+    return 'No text found';
+}
+
+function getTranslations(entry) {
+    const languages = ['english', 'spanish', 'portuguese', 'french', 'deutch', 'italian'];
+    return languages
+        .filter(lang => entry[lang])
+        .map(lang => `<div><strong>${lang}:</strong> ${escapeHtml(entry[lang])}</div>`)
+        .join('');
+}
+
+function escapeHtml(text) {
+    const div = document.createElement('div');
+    div.textContent = text;
+    return div.innerHTML;
+}
+</script>
+
+<style>
+#jsonContent {
+    font-family: monospace;
+    white-space: pre-wrap;
+    word-wrap: break-word;
+}
+
+.table-responsive {
+    margin-top: 1rem;
+}
+
+.btn-group {
+    margin-bottom: 1rem;
+}
+
+pre {
+    background-color: #f8f9fa;
+    border: 1px solid #dee2e6;
+    border-radius: 0.25rem;
+}
+</style>
+{% endblock %}

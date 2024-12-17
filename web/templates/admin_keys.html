@@ -1,0 +1,140 @@
+{% extends "base.html" %}
+
+{% block title %}API Key Management{% endblock %}
+
+{% block content %}
+<div class="row">
+    <div class="col-md-12">
+        <h1>API Key Management</h1>
+        
+        <div class="card mb-4">
+            <div class="card-body">
+                <h5 class="card-title">Create New API Key</h5>
+                <form id="createKeyForm" class="row g-3">
+                    <div class="col-md-8">
+                        <input type="text" class="form-control" id="keyName" placeholder="Key Name" required>
+                    </div>
+                    <div class="col-md-4">
+                        <button type="submit" class="btn btn-primary">Create Key</button>
+                    </div>
+                </form>
+            </div>
+        </div>
+
+        <div class="card">
+            <div class="card-body">
+                <h5 class="card-title">Existing API Keys</h5>
+                <div id="keysList">Loading...</div>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+document.addEventListener('DOMContentLoaded', async function() {
+    const adminKey = localStorage.getItem('adminKey');
+    if (!adminKey) {
+        const key = prompt('Please enter admin key:');
+        if (key) {
+            localStorage.setItem('adminKey', key);
+        }
+    }
+
+    async function loadKeys() {
+        try {
+            const response = await fetch('/admin/api-keys/', {
+                headers: {
+                    'X-Admin-Key': localStorage.getItem('adminKey')
+                }
+            });
+            const keys = await response.json();
+            
+            document.getElementById('keysList').innerHTML = `
+                <table class="table">
+                    <thead>
+                        <tr>
+                            <th>Name</th>
+                            <th>Key</th>
+                            <th>Created</th>
+                            <th>Last Used</th>
+                            <th>Status</th>
+                            <th>Actions</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        ${keys.map(key => `
+                            <tr>
+                                <td>${key.name}</td>
+                                <td><code>${key.key}</code></td>
+                                <td>${new Date(key.created_at).toLocaleString()}</td>
+                                <td>${key.last_used ? new Date(key.last_used).toLocaleString() : 'Never'}</td>
+                                <td>
+                                    <span class="badge bg-${key.is_active ? 'success' : 'danger'}">
+                                        ${key.is_active ? 'Active' : 'Inactive'}
+                                    </span>
+                                </td>
+                                <td>
+                                    <button class="btn btn-sm btn-danger" onclick="deleteKey(${key.id})">
+                                        Delete
+                                    </button>
+                                </td>
+                            </tr>
+                        `).join('')}
+                    </tbody>
+                </table>
+            `;
+        } catch (error) {
+            document.getElementById('keysList').innerHTML = `
+                <div class="alert alert-danger">
+                    Error loading keys: ${error.message}
+                </div>
+            `;
+        }
+    }
+
+    document.getElementById('createKeyForm').addEventListener('submit', async function(e) {
+        e.preventDefault();
+        try {
+            const response = await fetch('/admin/api-keys/', {
+                method: 'POST',
+                headers: {
+                    'X-Admin-Key': localStorage.getItem('adminKey'),
+                    'Content-Type': 'application/x-www-form-urlencoded',
+                },
+                body: `name=${encodeURIComponent(document.getElementById('keyName').value)}`
+            });
+            
+            if (!response.ok) throw new Error('Failed to create key');
+            
+            document.getElementById('keyName').value = '';
+            loadKeys();
+        } catch (error) {
+            alert('Error creating key: ' + error.message);
+        }
+    });
+
+    window.deleteKey = async function(keyId) {
+        if (!confirm('Are you sure you want to delete this key?')) return;
+        
+        try {
+            const response = await fetch(`/admin/api-keys/${keyId}`, {
+                method: 'DELETE',
+                headers: {
+                    'X-Admin-Key': localStorage.getItem('adminKey')
+                }
+            });
+            
+            if (!response.ok) throw new Error('Failed to delete key');
+            
+            loadKeys();
+        } catch (error) {
+            alert('Error deleting key: ' + error.message);
+        }
+    };
+
+    loadKeys();
+});
+</script>
+{% endblock %}

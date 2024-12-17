@@ -1,0 +1,12 @@
+.env
+*.db
+*.db-shm
+*.db-wal
+*.db-journal
+*.db-lock
+*.db-trace
+*.db-wal
+*.db-shm
+*.db-journal
+*.db-lock
+*.db-trace

@@ -1,39 +1,257 @@
----
-page_type: sample
-description: "A minimal sample app that can be used to demonstrate deploying FastAPI apps to Azure App Service."
-languages:
-- python
-products:
-- azure
-- azure-app-service
----
+Here's a comprehensive README.md for the API functionalities:
 
-# Deploy a Python (FastAPI) web app to Azure App Service - Sample Application
+```markdown:README.md
+# Translation Service API Documentation
 
-This is the sample FastAPI application for the Azure Quickstart [Deploy a Python (Django, Flask or FastAPI) web app to Azure App Service](https://docs.microsoft.com/en-us/azure/app-service/quickstart-python). For instructions on how to create the Azure resources and deploy the application to Azure, refer to the Quickstart article.
+This API provides translation services with both AI-powered and human translation capabilities. It includes authentication, text management, and administrative functions.
 
-Sample applications are available for the other frameworks here:
-- Django [https://github.com/Azure-Samples/msdocs-python-django-webapp-quickstart](https://github.com/Azure-Samples/msdocs-python-django-webapp-quickstart)
-- Flask [https://github.com/Azure-Samples/msdocs-python-flask-webapp-quickstart](https://github.com/Azure-Samples/msdocs-python-flask-webapp-quickstart)
+## Authentication
 
-If you need an Azure account, you can [create one for free](https://azure.microsoft.com/en-us/free/).
+All endpoints require authentication using an API key passed in the header:
 
-## Local Testing
+```bash
+X-API-Key: your-api-key
+```
 
-To try the application on your local machine:
+For admin endpoints, use the admin key:
+```bash
+X-Admin-Key: your-admin-key
+```
 
-### Install the requirements
+## Endpoints
 
-`pip install -r requirements.txt`
+### Translation Endpoints
 
-### Start the application
+#### AI Translation
+```bash
+POST /translate-text/
+```
+Translates text to all available languages using AI.
 
-`uvicorn main:app --reload`
+**Request:**
+```json
+{
+    "text": "Hello world",
+    "language": "english"
+}
+```
+Supported languages: "english", "spanish", "portuguese", "french", "deutch", "italian"
 
-### Example call
+**Response:**
+```json
+{
+    "original_text": "Hello world",
+    "original_language": "english",
+    "translations": {
+        "spanish": "Hola mundo",
+        "portuguese": "Olá mundo",
+        "french": "Bonjour le monde",
+        "deutch": "Hallo Welt",
+        "italian": "Ciao mondo"
+    },
+    "id": 1
+}
+```
 
-http://127.0.0.1:8000/
+#### Save Text for Human Translation
+```bash
+POST /save-text/
+```
+Submits text for human translation.
 
-## Next Steps
+**Request:**
+```json
+{
+    "text": "Hello world",
+    "language": "english"
+}
+```
 
-To learn more about FastAPI, see [FastAPI](https://fastapi.tiangolo.com/).
+**Response:**
+```json
+{
+    "id": 1,
+    "message": "Text saved successfully for translation"
+}
+```
+
+### Text Retrieval Endpoints
+
+#### Get All Texts
+```bash
+GET /get-texts/
+```
+Retrieves all texts associated with the API key.
+
+**Response:**
+```json
+[
+    {
+        "id": 1,
+        "english": "Hello world",
+        "spanish": "Hola mundo",
+        "portuguese": "Olá mundo",
+        "french": "Bonjour le monde",
+        "deutch": "Hallo Welt",
+        "italian": "Ciao mondo",
+        "created_at": "2024-01-20T15:30:00Z",
+        "updated_at": "2024-01-20T15:30:00Z"
+    }
+]
+```
+
+#### Get Specific Text
+```bash
+GET /get-text/{text_id}
+```
+Retrieves a specific text by ID.
+
+**Response:**
+```json
+{
+    "id": 1,
+    "translations": {
+        "english": "Hello world",
+        "spanish": "Hola mundo"
+    },
+    "metadata": {
+        "created_at": "2024-01-20T15:30:00Z",
+        "updated_at": "2024-01-20T15:30:00Z",
+        "api_key_name": "Client A"
+    }
+}
+```
+
+### Admin Endpoints
+
+#### List API Keys
+```bash
+GET /admin/api-keys/
+```
+Lists all API keys.
+
+**Response:**
+```json
+[
+    {
+        "id": 1,
+        "key": "api-key-value",
+        "name": "Client A",
+        "created_at": "2024-01-20T15:30:00Z",
+        "last_used": "2024-01-20T16:45:00Z"
+    }
+]
+```
+
+#### Create API Key
+```bash
+POST /admin/api-keys/
+```
+Creates a new API key.
+
+**Request:**
+```json
+{
+    "name": "New Client"
+}
+```
+
+**Response:**
+```json
+{
+    "id": 2,
+    "key": "new-api-key-value",
+    "name": "New Client",
+    "created_at": "2024-01-20T17:00:00Z"
+}
+```
+
+#### Delete API Key
+```bash
+DELETE /admin/api-keys/{key_id}
+```
+Deletes an API key.
+
+#### Get Pending Translations
+```bash
+GET /admin/pending-translations
+```
+Lists texts pending human translation.
+
+**Response:**
+```json
+[
+    {
+        "id": 1,
+        "original_language": "english",
+        "text": "Hello world",
+        "missing_translations": ["spanish", "french"],
+        "created_at": "2024-01-20T15:30:00Z",
+        "api_key_name": "Client A"
+    }
+]
+```
+
+#### Save Human Translation
+```bash
+POST /admin/translations/{entry_id}
+```
+Saves a human translation for a specific text.
+
+**Request:**
+```json
+{
+    "language": "spanish",
+    "text": "Hola mundo"
+}
+```
+
+**Response:**
+```json
+{
+    "message": "Translation saved successfully"
+}
+```
+
+## Error Responses
+
+The API uses standard HTTP status codes:
+
+- 200: Success
+- 400: Bad Request
+- 401: Unauthorized (Invalid API key)
+- 403: Forbidden (Insufficient permissions)
+- 404: Not Found
+- 422: Validation Error
+- 500: Server Error
+
+Error response format:
+```json
+{
+    "detail": "Error message here"
+}
+```
+
+## Rate Limiting
+
+- AI translations: 100 requests per day per API key
+- Human translations: Unlimited submissions
+- API key creation: Admin only
+- Text retrieval: Unlimited requests
+
+## Notes
+
+- All timestamps are in UTC
+- Text length is limited to 5000 characters
+- API keys should be kept secure and not shared
+- Admin key has access to all endpoints
+- Regular API keys can only access their own texts
+```
+
+This README provides:
+1. Authentication details
+2. Complete endpoint documentation
+3. Request/response examples
+4. Error handling information
+5. Rate limiting details
+6. Important notes and limitations
