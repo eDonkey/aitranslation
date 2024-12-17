@@ -10,3 +10,4 @@
 *.db-journal
 *.db-lock
 *.db-trace
+web/traductor.html

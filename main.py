@@ -2,7 +2,7 @@ from fastapi import FastAPI, Header, HTTPException, Depends, Request, Form
 from fastapi.responses import HTMLResponse, FileResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
-from sqlalchemy import create_engine, Column, Integer, String, Text, TIMESTAMP, text
+from sqlalchemy import create_engine, Column, Integer, String, Text, TIMESTAMP, text, Boolean
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker, Session
 from typing import Optional
@@ -13,6 +13,8 @@ import uvicorn
 import os
 from dotenv import load_dotenv
 import openai
+from secrets import token_urlsafe
+from fastapi.middleware.cors import CORSMiddleware
 
 openai.api_key = os.getenv("OPENAI_API_KEY")
 
@@ -20,14 +22,19 @@ load_dotenv()
 
 app = FastAPI()
 
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],  # In production, replace with specific origins
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
-# Database Configuration
 DATABASE_URL = os.getenv(
     "DATABASE_URL",
     f"postgresql://{os.getenv('DB_USER', 'default_user')}:{os.getenv('DB_PASSWORD', 'default_password')}@{os.getenv('DB_HOST', 'localhost')}:{os.getenv('DB_PORT', '5432')}/{os.getenv('DB_NAME', 'default_db')}"
 )
 
-# If using Heroku, modify the URL as Heroku provides it with 'postgres://' instead of 'postgresql://'
 if DATABASE_URL.startswith("postgres://"):
     DATABASE_URL = DATABASE_URL.replace("postgres://", "postgresql://", 1)
 
@@ -35,8 +42,7 @@ engine = create_engine(DATABASE_URL)
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 Base = declarative_base()
 
-# Define API Keys (in production, store these securely)
-VALID_API_KEYS = os.getenv("API_KEYS", "your-api-key-1,your-api-key-2").split(",")
+#VALID_API_KEYS = os.getenv("API_KEYS", "your-api-key-1,your-api-key-2").split(",")
 
 # Define valid languages
 class Language(str, Enum):
@@ -62,6 +68,16 @@ class TextEntry(Base):
     updated_at = Column(TIMESTAMP, nullable=True, onupdate=text('CURRENT_TIMESTAMP'))
     apikey_requested = Column(String, nullable=False)
 
+class APIKey(Base):
+    __tablename__ = "api_keys"
+
+    id = Column(Integer, primary_key=True, index=True)
+    key = Column(String, unique=True, index=True, nullable=False)
+    name = Column(String, nullable=False)  # A description/name for the key
+    created_at = Column(TIMESTAMP, nullable=False, server_default=text('CURRENT_TIMESTAMP'))
+    last_used = Column(TIMESTAMP, nullable=True)
+    is_active = Column(Boolean, default=True)
+
 # Create tables
 Base.metadata.create_all(bind=engine)
 
@@ -75,12 +91,26 @@ def get_db():
 
 # API Key validation
 def validate_api_key(x_api_key: str = Header(...)):
-    if x_api_key not in VALID_API_KEYS:
-        raise HTTPException(
-            status_code=401,
-            detail="Invalid API Key"
-        )
-    return x_api_key
+    db = SessionLocal()
+    try:
+        db_key = db.query(APIKey).filter(
+            APIKey.key == x_api_key,
+            APIKey.is_active == True
+        ).first()
+        
+        if not db_key:
+            raise HTTPException(
+                status_code=401,
+                detail="Invalid API Key"
+            )
+        
+        # Update last used timestamp
+        db_key.last_used = datetime.utcnow()
+        db.commit()
+        
+        return x_api_key
+    finally:
+        db.close()
 
 # Request model
 class TextRequest(BaseModel):
@@ -119,53 +149,68 @@ async def save_text(
 @app.get("/get-texts/")
 async def get_texts(
     db: Session = Depends(get_db),
-    api_key: str = Depends(validate_api_key)
+    api_key: str = Depends(validate_api_key),
+    filter_by_key: bool = True
 ):
-    texts = db.query(TextEntry).all()
+    query = db.query(TextEntry)
+    if filter_by_key:
+        query = query.filter(TextEntry.apikey_requested == api_key)
+    texts = query.all()
     return texts
 
 @app.post("/translate-text/")
 async def translate_text(
     text: str = Form(...),
     language: Language = Form(...),
-    target_language: Language = Form(...),
     db: Session = Depends(get_db),
     api_key: str = Depends(validate_api_key)
 ):
     try:
-        # Prepare the prompt for GPT
-        prompt = f"Translate this text from {language} to {target_language}:\n{text}"
-        
-        # Call OpenAI API with new format
-        response = openai.chat.completions.create(
-            model="gpt-3.5-turbo",
-            messages=[
-                {"role": "system", "content": "You are a professional translator."},
-                {"role": "user", "content": prompt}
-            ]
-        )
-        
-        translated_text = response.choices[0].message.content
-
-        # Save both original and translated text
+        # Create new text entry
         db_text = TextEntry(
             apikey_requested=api_key
         )
         
         # Set original text
         setattr(db_text, language, text)
-        # Set translated text
-        setattr(db_text, target_language, translated_text)
         
+        # Get all available languages from the Language enum
+        all_languages = [lang for lang in Language]
+        translations = {}
+        
+        # Translate to all languages except the source language
+        for target_lang in all_languages:
+            if target_lang == language:
+                continue  # Skip the source language
+                
+            prompt = f"Translate this text from {language} to {target_lang}:\n{text}"
+            
+            # Call OpenAI API
+            response = openai.chat.completions.create(
+                model="gpt-3.5-turbo",
+                messages=[
+                    {"role": "system", "content": "You are a professional translator."},
+                    {"role": "user", "content": prompt}
+                ]
+            )
+            
+            translated_text = response.choices[0].message.content
+            
+            # Save translation to database entry
+            setattr(db_text, target_lang, translated_text)
+            
+            # Store translation in response dictionary
+            translations[target_lang] = translated_text
+        
+        # Save to database
         db.add(db_text)
         db.commit()
         db.refresh(db_text)
         
         return {
             "original_text": text,
-            "translated_text": translated_text,
-            "from_language": language,
-            "to_language": target_language,
+            "original_language": language,
+            "translations": translations,
             "id": db_text.id
         }
         
@@ -174,6 +219,75 @@ async def translate_text(
             status_code=500,
             detail=f"Translation failed: {str(e)}"
         )
+
+@app.get("/admin/api-keys/")
+async def list_api_keys(
+    db: Session = Depends(get_db),
+    admin_key: str = Header(..., alias="X-Admin-Key")  # Require admin key for management
+):
+    if admin_key != os.getenv("ADMIN_KEY", "your-admin-key"):
+        raise HTTPException(
+            status_code=401,
+            detail="Invalid admin key"
+        )
+    
+    keys = db.query(APIKey).all()
+    return keys
+
+@app.post("/admin/api-keys/")
+async def create_api_key(
+    name: str = Form(...),
+    db: Session = Depends(get_db),
+    admin_key: str = Header(..., alias="X-Admin-Key")
+):
+    if admin_key != os.getenv("ADMIN_KEY", "your-admin-key"):
+        raise HTTPException(
+            status_code=401,
+            detail="Invalid admin key"
+        )
+    
+    # Generate a new API key
+    new_key = token_urlsafe(32)
+    
+    db_key = APIKey(
+        key=new_key,
+        name=name
+    )
+    
+    db.add(db_key)
+    db.commit()
+    db.refresh(db_key)
+    
+    return {
+        "id": db_key.id,
+        "key": new_key,
+        "name": name,
+        "created_at": db_key.created_at
+    }
+
+@app.delete("/admin/api-keys/{key_id}")
+async def delete_api_key(
+    key_id: int,
+    db: Session = Depends(get_db),
+    admin_key: str = Header(..., alias="X-Admin-Key")
+):
+    if admin_key != os.getenv("ADMIN_KEY", "your-admin-key"):
+        raise HTTPException(
+            status_code=401,
+            detail="Invalid admin key"
+        )
+    
+    db_key = db.query(APIKey).filter(APIKey.id == key_id).first()
+    if not db_key:
+        raise HTTPException(
+            status_code=404,
+            detail="API key not found"
+        )
+    
+    db_key.is_active = False  # Soft delete
+    db.commit()
+    
+    return {"message": "API key deactivated successfully"}
 
 openai.api_key = os.getenv("OPENAI_API_KEY")
 
