@@ -123,7 +123,6 @@ async def save_text(
     db: Session = Depends(get_db),
     api_key: str = Depends(validate_api_key)
 ):
-    # Create new text entry with all fields initially None
     db_text = TextEntry(
         english=None,
         spanish=None,
@@ -133,8 +132,6 @@ async def save_text(
         italian=None,
         apikey_requested=api_key
     )
-    
-    # Set the text for the specified language
     setattr(db_text, request.language.value, request.text)
     
     db.add(db_text)
@@ -296,7 +293,10 @@ app.mount("/static", StaticFiles(directory="web/static"), name="static")
 
 @app.get("/", response_class=HTMLResponse)
 async def home(request: Request):
-    return templates.TemplateResponse("traductor.html", {"request": request})
+    return templates.TemplateResponse("traductor.html", {
+        "request": request,
+        # Add any additional context data here if needed
+    })
 
 @app.get("/admin", response_class=HTMLResponse)
 async def admin_home(request: Request):
