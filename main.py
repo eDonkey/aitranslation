@@ -6,7 +6,7 @@ from sqlalchemy import create_engine, Column, Integer, String, Text, TIMESTAMP, 
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker, Session
 from typing import Optional
-from datetime import datetime
+from datetime import datetime, timedelta
 from pydantic import BaseModel
 from enum import Enum
 import uvicorn
@@ -290,6 +290,45 @@ async def delete_api_key(
     return {"message": "API key deactivated successfully"}
 
 openai.api_key = os.getenv("OPENAI_API_KEY")
+
+templates = Jinja2Templates(directory="web/templates")
+app.mount("/static", StaticFiles(directory="web/static"), name="static")
+
+@app.get("/", response_class=HTMLResponse)
+async def home(request: Request):
+    return templates.TemplateResponse("traductor.html", {"request": request})
+
+@app.get("/admin", response_class=HTMLResponse)
+async def admin_home(request: Request):
+    return templates.TemplateResponse("admin_home.html", {"request": request})
+
+@app.get("/admin/keys", response_class=HTMLResponse)
+async def admin_keys(request: Request):
+    return templates.TemplateResponse("admin_keys.html", {"request": request})
+
+@app.get("/client", response_class=HTMLResponse)
+async def client_dashboard(request: Request):
+    return templates.TemplateResponse("client_dashboard.html", {"request": request})
+
+@app.get("/api/admin/statistics")
+async def get_statistics(
+    db: Session = Depends(get_db),
+    admin_key: str = Header(..., alias="X-Admin-Key")
+):
+    if admin_key != os.getenv("ADMIN_KEY"):
+        raise HTTPException(status_code=401, detail="Invalid admin key")
+    
+    total_keys = db.query(APIKey).count()
+    total_translations = db.query(TextEntry).count()
+    active_today = db.query(APIKey).filter(
+        APIKey.last_used >= datetime.utcnow() - timedelta(days=1)
+    ).count()
+    
+    return {
+        "total_keys": total_keys,
+        "total_translations": total_translations,
+        "active_today": active_today
+    }
 
 if __name__ == '__main__':
     uvicorn.run('main:app', host='0.0.0.0', port=8000)

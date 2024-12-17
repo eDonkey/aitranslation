@@ -1,0 +1,142 @@
+{% extends "base.html" %}
+
+{% block title %}Translator{% endblock %}
+
+{% block content %}
+<div class="row">
+    <div class="col-md-12">
+        <h1>Translation Service</h1>
+        
+        <div class="card mb-4">
+            <div class="card-body">
+                <h5 class="card-title">Your API Key</h5>
+                <div class="input-group mb-3">
+                    <input type="text" class="form-control" id="apiKey" placeholder="Enter your API key">
+                    <button class="btn btn-primary" onclick="saveApiKey()">Save</button>
+                </div>
+            </div>
+        </div>
+
+        <div class="card">
+            <div class="card-body">
+                <h5 class="card-title">Translate Text</h5>
+                <form id="translationForm">
+                    <div class="mb-3">
+                        <label for="text" class="form-label">Text to translate:</label>
+                        <textarea class="form-control" id="text" rows="4" required></textarea>
+                    </div>
+
+                    <div class="mb-3">
+                        <label for="language" class="form-label">Original Language:</label>
+                        <select class="form-select" id="language" required>
+                            <option value="english">English</option>
+                            <option value="spanish">Spanish</option>
+                            <option value="portuguese">Portuguese</option>
+                            <option value="french">French</option>
+                            <option value="deutch">Deutch</option>
+                            <option value="italian">Italian</option>
+                        </select>
+                    </div>
+
+                    <button type="submit" class="btn btn-primary">Translate</button>
+                </form>
+            </div>
+        </div>
+
+        <div id="results" class="card mt-4" style="display: none;">
+            <div class="card-body">
+                <h5 class="card-title">Translation Results</h5>
+                <div id="translationsContainer"></div>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+document.addEventListener('DOMContentLoaded', function() {
+    const savedApiKey = localStorage.getItem('clientApiKey');
+    if (savedApiKey) {
+        document.getElementById('apiKey').value = savedApiKey;
+    }
+
+    document.getElementById('translationForm').addEventListener('submit', async function(e) {
+        e.preventDefault();
+        await translate();
+    });
+});
+
+function saveApiKey() {
+    const apiKey = document.getElementById('apiKey').value;
+    localStorage.setItem('clientApiKey', apiKey);
+}
+
+async function translate() {
+    const apiKey = localStorage.getItem('clientApiKey');
+    if (!apiKey) {
+        alert('Please enter and save your API key first');
+        return;
+    }
+
+    const text = document.getElementById('text').value;
+    const language = document.getElementById('language').value;
+    const resultsDiv = document.getElementById('results');
+    const translationsContainer = document.getElementById('translationsContainer');
+
+    try {
+        const formData = new FormData();
+        formData.append('text', text);
+        formData.append('language', language);
+
+        const response = await fetch('/translate-text/', {
+            method: 'POST',
+            headers: {
+                'X-API-Key': apiKey
+            },
+            body: formData
+        });
+
+        if (!response.ok) {
+            throw new Error(`HTTP error! status: ${response.status}`);
+        }
+
+        const data = await response.json();
+        
+        // Clear previous results
+        translationsContainer.innerHTML = '';
+        
+        // Show original text
+        translationsContainer.innerHTML += `
+            <div class="card mb-3">
+                <div class="card-body">
+                    <h6 class="card-subtitle mb-2 text-muted">Original (${data.original_language})</h6>
+                    <p class="card-text">${data.original_text}</p>
+                </div>
+            </div>
+        `;
+
+        // Show translations
+        Object.entries(data.translations).forEach(([lang, translation]) => {
+            translationsContainer.innerHTML += `
+                <div class="card mb-3">
+                    <div class="card-body">
+                        <h6 class="card-subtitle mb-2 text-muted">${lang.charAt(0).toUpperCase() + lang.slice(1)}</h6>
+                        <p class="card-text">${translation}</p>
+                    </div>
+                </div>
+            `;
+        });
+
+        resultsDiv.style.display = 'block';
+    } catch (error) {
+        translationsContainer.innerHTML = `
+            <div class="alert alert-danger">
+                Error: ${error.message}
+            </div>
+        `;
+        resultsDiv.style.display = 'block';
+    }
+}
+</script>
+{% endblock %}
