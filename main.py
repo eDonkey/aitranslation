@@ -1,11 +1,11 @@
-from fastapi import FastAPI, Header, HTTPException, Depends, Request, Form
+from fastapi import FastAPI, Header, HTTPException, Depends, Request, Form, Path
 from fastapi.responses import HTMLResponse, FileResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from sqlalchemy import create_engine, Column, Integer, String, Text, TIMESTAMP, text, Boolean
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker, Session
-from typing import Optional
+from typing import Optional, List
 from datetime import datetime, timedelta
 from pydantic import BaseModel
 from enum import Enum
@@ -329,6 +329,166 @@ async def get_statistics(
         "total_translations": total_translations,
         "active_today": active_today
     }
+
+# Response models for better type hints and validation
+class PendingTranslation(BaseModel):
+    id: int
+    original_language: str
+    text: str
+    missing_translations: List[str]
+    created_at: Optional[datetime] = None  # Make it optional with default None
+    api_key_name: Optional[str] = None     # Make it optional with default None
+
+    class Config:
+        from_attributes = True  # This is needed for SQLAlchemy model conversion
+
+@app.get("/admin/pending-translations", response_model=List[PendingTranslation])
+async def get_pending_translations(
+    db: Session = Depends(get_db),
+    admin_key: str = Header(..., alias="X-Admin-Key")
+):
+    if admin_key != os.getenv("ADMIN_KEY"):
+        raise HTTPException(
+            status_code=401,
+            detail="Invalid admin key"
+        )
+    
+    try:
+        # Get entries that might have pending translations
+        entries = (
+            db.query(TextEntry, APIKey.name.label('api_key_name'))
+            .outerjoin(APIKey, TextEntry.apikey_requested == APIKey.key)  # Changed to outer join
+            .all()
+        )
+        
+        pending_translations = []
+        languages = ["english", "spanish", "portuguese", "french", "deutch", "italian"]
+        
+        for entry, api_key_name in entries:
+            # Find which language has content (original language)
+            original_language = None
+            original_text = None
+            missing_translations = []
+            
+            # Check each language field
+            for lang in languages:
+                value = getattr(entry, lang)
+                if value is not None and original_language is None:
+                    original_language = lang
+                    original_text = value
+                elif value is None:
+                    missing_translations.append(lang)
+            
+            # Only include entries that have missing translations
+            if missing_translations and original_language and original_text:
+                pending_translations.append(
+                    {
+                        "id": entry.id,
+                        "original_language": original_language,
+                        "text": original_text,
+                        "missing_translations": missing_translations,
+                        "created_at": entry.created_at,
+                        "api_key_name": api_key_name or "Unknown"  # Provide default value
+                    }
+                )
+        
+        # Sort by creation date, newest first
+        pending_translations.sort(key=lambda x: x.get('created_at') or datetime.min, reverse=True)
+        
+        return pending_translations
+        
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Error fetching pending translations: {str(e)}"
+        )
+
+@app.post("/admin/translations/{entry_id}")
+async def save_human_translation(
+    entry_id: int,
+    translation: dict,
+    db: Session = Depends(get_db),
+    admin_key: str = Header(..., alias="X-Admin-Key")
+):
+    if admin_key != os.getenv("ADMIN_KEY"):
+        raise HTTPException(status_code=401, detail="Invalid admin key")
+    
+    entry = db.query(TextEntry).filter(TextEntry.id == entry_id).first()
+    if not entry:
+        raise HTTPException(status_code=404, detail="Entry not found")
+    
+    # Update the specified language field
+    setattr(entry, translation["language"], translation["text"])
+    entry.updated_at = datetime.utcnow()
+    
+    db.commit()
+    
+    return {"message": "Translation saved successfully"}
+
+@app.get("/admin/human-translations", response_class=HTMLResponse)
+async def human_translations_dashboard(request: Request):
+    return templates.TemplateResponse("human_translations.html", {"request": request})
+
+@app.get("/get-text/{text_id}")
+async def get_text_by_id(
+    text_id: int = Path(..., gt=0),  # Ensure positive integer
+    db: Session = Depends(get_db),
+    api_key: str = Header(..., alias="X-API-Key")
+):
+    # Validate API key
+    db_api_key = db.query(APIKey).filter(APIKey.key == api_key).first()
+    if not db_api_key:
+        raise HTTPException(
+            status_code=401,
+            detail="Invalid API key"
+        )
+
+    # Get the text entry
+    text_entry = (
+        db.query(TextEntry)
+        .filter(TextEntry.id == text_id)
+        .first()
+    )
+
+    # Check if text exists
+    if not text_entry:
+        raise HTTPException(
+            status_code=404,
+            detail="Text not found"
+        )
+
+    # Check if the API key has access to this text
+    if text_entry.apikey_requested != api_key:
+        raise HTTPException(
+            status_code=403,
+            detail="You don't have permission to access this text"
+        )
+
+    # Convert to dictionary and add metadata
+    result = {
+        "id": text_entry.id,
+        "translations": {
+            "english": text_entry.english,
+            "spanish": text_entry.spanish,
+            "portuguese": text_entry.portuguese,
+            "french": text_entry.french,
+            "deutch": text_entry.deutch,
+            "italian": text_entry.italian
+        },
+        "metadata": {
+            "created_at": text_entry.created_at,
+            "updated_at": text_entry.updated_at,
+            "api_key_name": db_api_key.name
+        }
+    }
+
+    # Remove None values from translations
+    result["translations"] = {
+        k: v for k, v in result["translations"].items() 
+        if v is not None
+    }
+
+    return result
 
 if __name__ == '__main__':
     uvicorn.run('main:app', host='0.0.0.0', port=8000)
