@@ -185,9 +185,51 @@ async def translate_text(
     text: str = Form(...),
     language: Language = Form(...),
     db: Session = Depends(get_db),
-    api_key: str = Depends(validate_api_key)
+    api_key: str = Header(..., alias="X-API-Key")
 ):
     try:
+        # Check if this is a trial request
+        if api_key == 'trial-key':
+            # For trial requests, just do the translation without DB storage
+            translations = {}
+            all_languages = [lang for lang in Language]
+            
+            # Translate to all languages except the source language
+            for target_lang in all_languages:
+                if target_lang == language:
+                    continue
+                    
+                prompt = f"Translate this text from {language} to {target_lang}:\n{text}"
+                
+                response = openai.chat.completions.create(
+                    model="gpt-3.5-turbo",
+                    messages=[
+                        {"role": "system", "content": "You are a professional translator."},
+                        {"role": "user", "content": prompt}
+                    ]
+                )
+                
+                translated_text = response.choices[0].message.content
+                translations[target_lang] = translated_text
+            
+            return {
+                "original_text": text,
+                "original_language": language,
+                "translations": translations
+            }
+        
+        # For authenticated requests, continue with the existing logic
+        db_key = db.query(APIKey).filter(
+            APIKey.key == api_key,
+            APIKey.is_active == True
+        ).first()
+        
+        if not db_key:
+            raise HTTPException(
+                status_code=401,
+                detail="Invalid API Key"
+            )
+        
         # Create new text entry
         db_text = TextEntry(
             apikey_requested=api_key
@@ -203,11 +245,10 @@ async def translate_text(
         # Translate to all languages except the source language
         for target_lang in all_languages:
             if target_lang == language:
-                continue  # Skip the source language
+                continue
                 
             prompt = f"Translate this text from {language} to {target_lang}:\n{text}"
             
-            # Call OpenAI API
             response = openai.chat.completions.create(
                 model="gpt-3.5-turbo",
                 messages=[
@@ -235,7 +276,7 @@ async def translate_text(
             "translations": translations,
             "id": db_text.id
         }
-        
+            
     except Exception as e:
         raise HTTPException(
             status_code=500,

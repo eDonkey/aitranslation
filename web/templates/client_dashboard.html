@@ -9,6 +9,36 @@
 
     <!-- Content Row -->
     <div class="row">
+        <!-- Free Trial Translation Card -->
+        <div class="col-xl-12 col-md-12 mb-4">
+            <div class="card shadow h-100">
+                <div class="card-header py-3 d-flex justify-content-between align-items-center">
+                    <h6 class="m-0 font-weight-bold text-primary">Try AI Translation for Free!</h6>
+                    <span class="badge badge-info">One-time trial</span>
+                </div>
+                <div class="card-body">
+                    <form id="trialTranslationForm">
+                        <div class="form-group">
+                            <label for="trialSourceText">Text to Translate</label>
+                            <textarea class="form-control" id="trialSourceText" rows="4" required></textarea>
+                        </div>
+                        <div class="form-group">
+                            <label for="trialSourceLanguage">Source Language</label>
+                            <select class="form-control" id="trialSourceLanguage" required>
+                                <option value="english">English</option>
+                                <option value="spanish">Spanish</option>
+                                <option value="portuguese">Portuguese</option>
+                                <option value="french">French</option>
+                                <option value="deutch">German</option>
+                                <option value="italian">Italian</option>
+                            </select>
+                        </div>
+                        <button type="submit" class="btn btn-success">Try Free Translation</button>
+                    </form>
+                </div>
+            </div>
+        </div>
+
         <!-- Translation Form Card -->
         <div class="col-xl-12 col-md-12 mb-4">
             <div class="card shadow h-100">
@@ -189,6 +219,69 @@ $(document).ready(function() {
                 Swal.fire({
                     title: 'Error!',
                     text: xhr.responseJSON?.detail || 'Error fetching translation',
+                    icon: 'error'
+                });
+            }
+        });
+    });
+
+    // Handle trial translation form submission
+    $('#trialTranslationForm').on('submit', function(e) {
+        e.preventDefault();
+        
+        const formData = new FormData();
+        formData.append('text', $('#trialSourceText').val());
+        formData.append('language', $('#trialSourceLanguage').val());
+        
+        $.ajax({
+            url: '/translate-text/',
+            method: 'POST',
+            data: formData,
+            processData: false,
+            contentType: false,
+            headers: {
+                'X-API-Key': 'trial-key'  // Use a special trial key that your backend can recognize
+            },
+            success: function(response) {
+                let translationsHtml = '<div class="translations-grid">';
+                
+                // Add original text
+                translationsHtml += `
+                    <div class="translation-item">
+                        <h6 class="font-weight-bold">Original (${$('#trialSourceLanguage').val()})</h6>
+                        <p>${$('#trialSourceText').val()}</p>
+                    </div>
+                `;
+                
+                // Add translations
+                Object.entries(response.translations).forEach(([lang, text]) => {
+                    if (lang !== $('#trialSourceLanguage').val()) {
+                        translationsHtml += `
+                            <div class="translation-item">
+                                <h6 class="font-weight-bold">${lang.charAt(0).toUpperCase() + lang.slice(1)}</h6>
+                                <p>${text}</p>
+                            </div>
+                        `;
+                    }
+                });
+                
+                translationsHtml += '</div>';
+                
+                Swal.fire({
+                    title: 'Translation Complete!',
+                    html: translationsHtml,
+                    icon: 'success',
+                    width: '800px'
+                });
+                
+                // Clear the form
+                $('#trialSourceText').val('');
+                $('#trialSourceLanguage').val('english');
+            },
+            error: function(xhr) {
+                Swal.fire({
+                    title: 'Error!',
+                    text: xhr.responseJSON?.detail || 'Error with trial translation',
                     icon: 'error'
                 });
             }
