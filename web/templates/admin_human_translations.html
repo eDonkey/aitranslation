@@ -1,0 +1,255 @@
+{% extends "base.html" %}
+
+{% block content %}
+<div class="container-fluid">
+    <!-- Page Heading -->
+    <div class="d-sm-flex align-items-center justify-content-between mb-4">
+        <h1 class="h3 mb-0 text-gray-800">Human Translations Management</h1>
+    </div>
+
+    <!-- Content Row -->
+    <div class="row">
+        <!-- Pending Translations Card -->
+        <div class="col-xl-12 col-md-12 mb-4">
+            <div class="card shadow h-100">
+                <div class="card-header py-3">
+                    <h6 class="m-0 font-weight-bold text-primary">Pending Human Translations</h6>
+                </div>
+                <div class="card-body">
+                    <div class="table-responsive">
+                        <table class="table" id="pendingTranslationsTable">
+                            <thead>
+                                <tr>
+                                    <th>Original Text</th>
+                                    <th>Source Language</th>
+                                    <th>Requested At</th>
+                                    <th>Actions</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                {% for translation in pending_translations %}
+                                <tr>
+                                    <td>{{ translation.get_source_text() }}</td>
+                                    <td>{{ translation.get_source_language() }}</td>
+                                    <td>{{ translation.created_at.strftime('%Y-%m-%d %H:%M') }}</td>
+                                    <td>
+                                        <button class="btn btn-primary btn-sm translate-btn" 
+                                                data-id="{{ translation.id }}"
+                                                data-text="{{ translation.get_source_text() }}"
+                                                data-language="{{ translation.get_source_language() }}">
+                                            Translate
+                                        </button>
+                                    </td>
+                                </tr>
+                                {% endfor %}
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Completed Translations Card -->
+        <div class="col-xl-12 col-md-12 mb-4">
+            <div class="card shadow h-100">
+                <div class="card-header py-3">
+                    <h6 class="m-0 font-weight-bold text-primary">Completed Human Translations</h6>
+                </div>
+                <div class="card-body">
+                    <div class="table-responsive">
+                        <table class="table" id="completedTranslationsTable">
+                            <thead>
+                                <tr>
+                                    <th>Original Text</th>
+                                    <th>Source Language</th>
+                                    <th>Completed At</th>
+                                    <th>Actions</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                {% for translation in completed_translations %}
+                                <tr>
+                                    <td>{{ translation.get_source_text() }}</td>
+                                    <td>{{ translation.get_source_language() }}</td>
+                                    <td>{{ translation.updated_at.strftime('%Y-%m-%d %H:%M') }}</td>
+                                    <td>
+                                        <button class="btn btn-info btn-sm view-translation" 
+                                                data-id="{{ translation.id }}">
+                                            View
+                                        </button>
+                                    </td>
+                                </tr>
+                                {% endfor %}
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Translation Modal -->
+<div class="modal fade" id="translationModal" tabindex="-1">
+    <div class="modal-dialog modal-lg">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title">Translation Form</h5>
+                <button type="button" class="close" data-dismiss="modal">
+                    <span>&times;</span>
+                </button>
+            </div>
+            <div class="modal-body">
+                <form id="translationForm">
+                    <input type="hidden" id="translationId">
+                    <div class="form-group">
+                        <label>Original Text:</label>
+                        <p id="originalText" class="form-control-static"></p>
+                    </div>
+                    <div class="form-group">
+                        <label>Source Language:</label>
+                        <p id="sourceLanguage" class="form-control-static"></p>
+                    </div>
+                    <div class="form-group">
+                        <label for="translatedText">Translation:</label>
+                        <textarea class="form-control" id="translatedText" rows="4" required></textarea>
+                    </div>
+                </form>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-secondary" data-dismiss="modal">Close</button>
+                <button type="button" class="btn btn-primary" id="saveTranslation">Save Translation</button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- View Translation Modal -->
+<div class="modal fade" id="viewTranslationModal" tabindex="-1">
+    <div class="modal-dialog modal-lg">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title">Translation Details</h5>
+                <button type="button" class="close" data-dismiss="modal">
+                    <span>&times;</span>
+                </button>
+            </div>
+            <div class="modal-body">
+                <div id="translationDetails"></div>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block extra_js %}
+<script>
+$(document).ready(function() {
+    // Initialize DataTables
+    $('#pendingTranslationsTable').DataTable({
+        order: [[2, 'desc']]
+    });
+    $('#completedTranslationsTable').DataTable({
+        order: [[2, 'desc']]
+    });
+
+    // Handle translate button click
+    $('.translate-btn').click(function() {
+        const id = $(this).data('id');
+        const text = $(this).data('text');
+        const language = $(this).data('language');
+        
+        $('#translationId').val(id);
+        $('#originalText').text(text);
+        $('#sourceLanguage').text(language);
+        $('#translatedText').val('');
+        $('#translationModal').modal('show');
+    });
+
+    // Handle save translation
+    $('#saveTranslation').click(function() {
+        const id = $('#translationId').val();
+        const translation = $('#translatedText').val();
+        
+        if (!translation) {
+            alert('Please enter a translation');
+            return;
+        }
+
+        $.ajax({
+            url: `/api/human-translations/${id}`,
+            method: 'POST',
+            contentType: 'application/json',
+            data: JSON.stringify({ translation: translation }),
+            success: function(response) {
+                $('#translationModal').modal('hide');
+                Swal.fire({
+                    title: 'Success!',
+                    text: 'Translation saved successfully',
+                    icon: 'success'
+                }).then(() => {
+                    location.reload();
+                });
+            },
+            error: function(xhr) {
+                Swal.fire({
+                    title: 'Error!',
+                    text: xhr.responseJSON?.detail || 'Error saving translation',
+                    icon: 'error'
+                });
+            }
+        });
+    });
+
+    // Handle view translation button clicks
+    $('.view-translation').click(function() {
+        const id = $(this).data('id');
+        
+        $.ajax({
+            url: `/api/translations/${id}`,
+            method: 'GET',
+            success: function(translation) {
+                let html = '<div class="translations-grid">';
+                const languages = ['english', 'spanish', 'portuguese', 'french', 'deutch', 'italian'];
+                
+                languages.forEach(lang => {
+                    if (translation[lang]) {
+                        html += `
+                            <div class="translation-item">
+                                <h6 class="font-weight-bold">${lang.charAt(0).toUpperCase() + lang.slice(1)}</h6>
+                                <p>${translation[lang]}</p>
+                            </div>
+                        `;
+                    }
+                });
+                
+                html += '</div>';
+                $('#translationDetails').html(html);
+                $('#viewTranslationModal').modal('show');
+            },
+            error: function(xhr) {
+                Swal.fire({
+                    title: 'Error!',
+                    text: xhr.responseJSON?.detail || 'Error fetching translation',
+                    icon: 'error'
+                });
+            }
+        });
+    });
+});
+</script>
+
+<style>
+.translations-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+    gap: 1rem;
+}
+
+.translation-item {
+    background: #f8f9fc;
+    padding: 1rem;
+    border-radius: 0.35rem;
+}
+</style>
+{% endblock %} 

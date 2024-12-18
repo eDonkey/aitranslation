@@ -1,0 +1,111 @@
+{% extends "base.html" %}
+
+{% block title %}Admin Dashboard{% endblock %}
+
+{% block content %}
+<div class="container">
+    <div class="row">
+        <div class="col-md-12">
+            <h1>Admin Dashboard</h1>
+            
+            <div class="row mb-4">
+                <div class="col-md-4">
+                    <div class="card">
+                        <div class="card-body">
+                            <h5 class="card-title">Pending Translations</h5>
+                            <h2>{{ pending_count }}</h2>
+                        </div>
+                    </div>
+                </div>
+                <div class="col-md-4">
+                    <div class="card">
+                        <div class="card-body">
+                            <h5 class="card-title">Active API Keys</h5>
+                            <h2>{{ active_keys }}</h2>
+                        </div>
+                    </div>
+                </div>
+                <div class="col-md-4">
+                    <div class="card">
+                        <div class="card-body">
+                            <h5 class="card-title">Total Translations</h5>
+                            <h2>{{ total_translations }}</h2>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="card">
+                <div class="card-body">
+                    <h5 class="card-title">Recent Translations</h5>
+                    <div class="table-responsive">
+                        <table class="table">
+                            <thead>
+                                <tr>
+                                    <th>ID</th>
+                                    <th>Text</th>
+                                    <th>Created At</th>
+                                    <th>Status</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                {% for translation in recent_translations %}
+                                <tr>
+                                    <td>{{ translation.id }}</td>
+                                    <td>
+                                        {% if translation.english %}
+                                            {{ translation.english[:50] }}...
+                                        {% elif translation.spanish %}
+                                            {{ translation.spanish[:50] }}...
+                                        {% elif translation.portuguese %}
+                                            {{ translation.portuguese[:50] }}...
+                                        {% elif translation.french %}
+                                            {{ translation.french[:50] }}...
+                                        {% elif translation.deutch %}
+                                            {{ translation.deutch[:50] }}...
+                                        {% elif translation.italian %}
+                                            {{ translation.italian[:50] }}...
+                                        {% else %}
+                                            No text available
+                                        {% endif %}
+                                    </td>
+                                    <td>{{ translation.created_at.strftime('%Y-%m-%d %H:%M:%S') }}</td>
+                                    <td>
+                                        {% if translation.updated_at %}
+                                            <span class="badge bg-success">Completed</span>
+                                        {% else %}
+                                            <span class="badge bg-warning">Pending</span>
+                                        {% endif %}
+                                    </td>
+                                </tr>
+                                {% endfor %}
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+    // Add token to all fetch requests
+    const token = localStorage.getItem('access_token');
+    if (token) {
+        const originalFetch = window.fetch;
+        window.fetch = function() {
+            const args = Array.prototype.slice.call(arguments);
+            if (args[1] === undefined) {
+                args[1] = {};
+            }
+            if (args[1].headers === undefined) {
+                args[1].headers = {};
+            }
+            args[1].headers['Authorization'] = `Bearer ${token}`;
+            return originalFetch.apply(this, args);
+        };
+    }
+</script>
+{% endblock %} 

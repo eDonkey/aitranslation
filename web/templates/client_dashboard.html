@@ -1,194 +1,213 @@
 {% extends "base.html" %}
 
-{% block title %}Client Dashboard{% endblock %}
-
 {% block content %}
-<div class="row">
-    <div class="col-md-12">
-        <h1>Translation History</h1>
-        
-        <div class="card mb-4">
-            <div class="card-body">
-                <h5 class="card-title">Your API Key</h5>
-                <div class="input-group mb-3">
-                    <input type="text" class="form-control" id="apiKey" placeholder="Enter your API key">
-                    <button class="btn btn-primary" onclick="saveApiKey()">Save</button>
+<div class="container-fluid">
+    <!-- Page Heading -->
+    <div class="d-sm-flex align-items-center justify-content-between mb-4">
+        <h1 class="h3 mb-0 text-gray-800">Translation Dashboard</h1>
+    </div>
+
+    <!-- Content Row -->
+    <div class="row">
+        <!-- Translation Form Card -->
+        <div class="col-xl-12 col-md-12 mb-4">
+            <div class="card shadow h-100">
+                <div class="card-header py-3">
+                    <h6 class="m-0 font-weight-bold text-primary">New Translation</h6>
+                </div>
+                <div class="card-body">
+                    <form id="translationForm">
+                        <div class="form-group">
+                            <label for="sourceText">Text to Translate</label>
+                            <textarea class="form-control" id="sourceText" rows="4" required></textarea>
+                        </div>
+                        <div class="form-group">
+                            <label for="sourceLanguage">Source Language</label>
+                            <select class="form-control" id="sourceLanguage" required>
+                                <option value="english">English</option>
+                                <option value="spanish">Spanish</option>
+                                <option value="portuguese">Portuguese</option>
+                                <option value="french">French</option>
+                                <option value="deutch">German</option>
+                                <option value="italian">Italian</option>
+                            </select>
+                        </div>
+                        <button type="submit" class="btn btn-primary">Submit Translation</button>
+                    </form>
                 </div>
             </div>
         </div>
 
-        <div class="card">
-            <div class="card-body">
-                <h5 class="card-title">Translation History</h5>
-                <div class="mb-3">
-                    <div class="btn-group" role="group">
-                        <button type="button" class="btn btn-outline-primary active" onclick="switchView('table')">Table View</button>
-                        <button type="button" class="btn btn-outline-primary" onclick="switchView('json')">JSON View</button>
+        <!-- Recent Translations Card -->
+        <div class="col-xl-12 col-md-12 mb-4">
+            <div class="card shadow h-100">
+                <div class="card-header py-3">
+                    <h6 class="m-0 font-weight-bold text-primary">My Recent Translations</h6>
+                </div>
+                <div class="card-body">
+                    <div class="table-responsive">
+                        <table class="table" id="translationsTable">
+                            <thead>
+                                <tr>
+                                    <th>Original Text</th>
+                                    <th>Language</th>
+                                    <th>Status</th>
+                                    <th>Created At</th>
+                                    <th>Actions</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                {% for translation in translations %}
+                                <tr>
+                                    <td>{{ translation.english or translation.spanish or translation.portuguese or translation.french or translation.deutch or translation.italian }}</td>
+                                    <td>
+                                        {% if translation.english %}English
+                                        {% elif translation.spanish %}Spanish
+                                        {% elif translation.portuguese %}Portuguese
+                                        {% elif translation.french %}French
+                                        {% elif translation.deutch %}German
+                                        {% elif translation.italian %}Italian
+                                        {% endif %}
+                                    </td>
+                                    <td>
+                                        {% if translation.updated_at %}
+                                        <span class="badge badge-success">Completed</span>
+                                        {% else %}
+                                        <span class="badge badge-warning">Pending</span>
+                                        {% endif %}
+                                    </td>
+                                    <td>{{ translation.created_at.strftime('%Y-%m-%d %H:%M') }}</td>
+                                    <td>
+                                        <button class="btn btn-info btn-sm view-translation" data-id="{{ translation.id }}">
+                                            View
+                                        </button>
+                                    </td>
+                                </tr>
+                                {% endfor %}
+                            </tbody>
+                        </table>
                     </div>
                 </div>
-                <div id="tableView">
-                    <div id="translationsList">
-                        Please enter your API key to view translations.
-                    </div>
-                </div>
-                <div id="jsonView" style="display: none;">
-                    <pre id="jsonContent" class="bg-light p-3 rounded" style="max-height: 500px; overflow-y: auto;">
-                    </pre>
-                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Translation Details Modal -->
+<div class="modal fade" id="translationModal" tabindex="-1" role="dialog">
+    <div class="modal-dialog modal-lg" role="document">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title">Translation Details</h5>
+                <button type="button" class="close" data-dismiss="modal">
+                    <span>&times;</span>
+                </button>
+            </div>
+            <div class="modal-body">
+                <div id="translationDetails"></div>
             </div>
         </div>
     </div>
 </div>
 {% endblock %}
 
-{% block scripts %}
+{% block extra_js %}
 <script>
-document.addEventListener('DOMContentLoaded', function() {
-    const savedApiKey = localStorage.getItem('clientApiKey');
-    if (savedApiKey) {
-        document.getElementById('apiKey').value = savedApiKey;
-        loadTranslations();
-    }
-});
+$(document).ready(function() {
+    // Initialize DataTable
+    console.log("{{ user.api_key }}");
+    $('#translationsTable').DataTable({
+        order: [[3, 'desc']] // Sort by created_at by default
+    });
 
-function saveApiKey() {
-    const apiKey = document.getElementById('apiKey').value;
-    localStorage.setItem('clientApiKey', apiKey);
-    loadTranslations();
-}
-
-let currentTranslations = []; // Store translations data globally
-
-function switchView(viewType) {
-    const tableView = document.getElementById('tableView');
-    const jsonView = document.getElementById('jsonView');
-    const buttons = document.querySelectorAll('.btn-group .btn');
-
-    buttons.forEach(btn => btn.classList.remove('active'));
-    event.target.classList.add('active');
-
-    if (viewType === 'table') {
-        tableView.style.display = 'block';
-        jsonView.style.display = 'none';
-    } else {
-        tableView.style.display = 'none';
-        jsonView.style.display = 'block';
-        // Format and display JSON
-        document.getElementById('jsonContent').textContent = 
-            JSON.stringify(currentTranslations, null, 2);
-    }
-}
-
-async function loadTranslations() {
-    const apiKey = localStorage.getItem('clientApiKey');
-    if (!apiKey) return;
-
-    try {
-        const response = await fetch('/get-texts/', {
+    // Handle translation form submission
+    $('#translationForm').on('submit', function(e) {
+        e.preventDefault();
+        
+        const formData = new FormData();
+        formData.append('text', $('#sourceText').val());
+        formData.append('language', $('#sourceLanguage').val());
+        
+        $.ajax({
+            url: '/translate-text/',
+            method: 'POST',
+            data: formData,
+            processData: false,
+            contentType: false,
             headers: {
-                'X-API-Key': apiKey
+                'X-API-Key': '{{ user.api_key }}'
+            },
+            success: function(response) {
+                Swal.fire({
+                    title: 'Success!',
+                    text: 'Translation submitted successfully',
+                    icon: 'success'
+                }).then(() => {
+                    location.reload();
+                });
+            },
+            error: function(xhr) {
+                Swal.fire({
+                    title: 'Error!',
+                    text: xhr.responseJSON?.detail || 'Error submitting translation',
+                    icon: 'error'
+                });
             }
         });
-        
-        if (!response.ok) throw new Error('Failed to load translations');
-        
-        const translations = await response.json();
-        currentTranslations = translations; // Store the translations
-        
-        // Update table view
-        const tableHtml = generateTableView(translations);
-        document.getElementById('translationsList').innerHTML = tableHtml;
-        
-        // Update JSON view
-        document.getElementById('jsonContent').textContent = 
-            JSON.stringify(translations, null, 2);
-        
-    } catch (error) {
-        document.getElementById('translationsList').innerHTML = `
-            <div class="alert alert-danger">
-                Error loading translations: ${error.message}
-            </div>
-        `;
-        document.getElementById('jsonContent').textContent = 
-            JSON.stringify({ error: error.message }, null, 2);
-    }
-}
+    });
 
-function generateTableView(translations) {
-    if (translations.length === 0) {
-        return '<div class="alert alert-info">No translations found</div>';
-    }
-
-    return `
-        <div class="table-responsive">
-            <table class="table">
-                <thead>
-                    <tr>
-                        <th>ID</th>
-                        <th>Original Text</th>
-                        <th>Translations</th>
-                        <th>Created At</th>
-                    </tr>
-                </thead>
-                <tbody>
-                    ${translations.map(entry => `
-                        <tr>
-                            <td>${entry.id}</td>
-                            <td>${getOriginalText(entry)}</td>
-                            <td>${getTranslations(entry)}</td>
-                            <td>${new Date(entry.created_at).toLocaleString()}</td>
-                        </tr>
-                    `).join('')}
-                </tbody>
-            </table>
-        </div>
-    `;
-}
-
-function getOriginalText(entry) {
-    const languages = ['english', 'spanish', 'portuguese', 'french', 'deutch', 'italian'];
-    for (const lang of languages) {
-        if (entry[lang]) {
-            return `<strong>${lang}:</strong> ${escapeHtml(entry[lang])}`;
-        }
-    }
-    return 'No text found';
-}
-
-function getTranslations(entry) {
-    const languages = ['english', 'spanish', 'portuguese', 'french', 'deutch', 'italian'];
-    return languages
-        .filter(lang => entry[lang])
-        .map(lang => `<div><strong>${lang}:</strong> ${escapeHtml(entry[lang])}</div>`)
-        .join('');
-}
-
-function escapeHtml(text) {
-    const div = document.createElement('div');
-    div.textContent = text;
-    return div.innerHTML;
-}
+    // Handle view translation button clicks
+    $('.view-translation').on('click', function() {
+        const translationId = $(this).data('id');
+        console.log(translationId);
+        $.ajax({
+            url: `/get-translation/${translationId}`,
+            method: 'GET',
+            headers: {
+                'X-API-Key': '{{ user.api_key }}'
+            },
+            success: function(translation) {
+                let html = '<div class="translations-grid">';
+                const languages = ['english', 'spanish', 'portuguese', 'french', 'deutch', 'italian'];
+                
+                languages.forEach(lang => {
+                    if (translation[lang]) {
+                        html += `
+                            <div class="translation-item">
+                                <h6 class="font-weight-bold">${lang.charAt(0).toUpperCase() + lang.slice(1)}</h6>
+                                <p>${translation[lang]}</p>
+                            </div>
+                        `;
+                    }
+                });
+                
+                html += '</div>';
+                $('#translationDetails').html(html);
+                $('#translationModal').modal('show');
+            },
+            error: function(xhr) {
+                Swal.fire({
+                    title: 'Error!',
+                    text: xhr.responseJSON?.detail || 'Error fetching translation',
+                    icon: 'error'
+                });
+            }
+        });
+    });
+});
 </script>
 
 <style>
-#jsonContent {
-    font-family: monospace;
-    white-space: pre-wrap;
-    word-wrap: break-word;
+.translations-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+    gap: 1rem;
 }
 
-.table-responsive {
-    margin-top: 1rem;
-}
-
-.btn-group {
-    margin-bottom: 1rem;
-}
-
-pre {
-    background-color: #f8f9fa;
-    border: 1px solid #dee2e6;
-    border-radius: 0.25rem;
+.translation-item {
+    background: #f8f9fc;
+    padding: 1rem;
+    border-radius: 0.35rem;
 }
 </style>
 {% endblock %}
