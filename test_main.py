@@ -20,6 +20,7 @@ def override_get_db():
 app.dependency_overrides[get_db] = override_get_db
 
 # Create the test database
+Base.metadata.drop_all(bind=engine)  # Clear the database before creating tables
 Base.metadata.create_all(bind=engine)
 
 client = TestClient(app)

@@ -501,16 +501,48 @@ async def admin_dashboard(
         if not user or not user.is_admin:
             return RedirectResponse(url="/login", status_code=303)
         
-        # Get statistics
-        pending_count = db.query(TextEntry).filter(
-            TextEntry.updated_at == None
-        ).count()
-        
-        active_keys = db.query(APIKey).filter(
-            APIKey.is_active == True
-        ).count()
-        
-        total_translations = db.query(TextEntry).count()
+        # Calculate statistics
+        now = datetime.utcnow()
+        stats = {
+            "manual_translations": {
+                "last_24_hours": db.query(TextEntry).filter(
+                    TextEntry.is_human_translation == True,
+                    TextEntry.updated_at >= now - timedelta(hours=24)
+                ).count(),
+                "last_7_days": db.query(TextEntry).filter(
+                    TextEntry.is_human_translation == True,
+                    TextEntry.updated_at >= now - timedelta(days=7)
+                ).count(),
+                "last_30_days": db.query(TextEntry).filter(
+                    TextEntry.is_human_translation == True,
+                    TextEntry.updated_at >= now - timedelta(days=30)
+                ).count(),
+            },
+            "ai_translations": {
+                "last_24_hours": db.query(TextEntry).filter(
+                    TextEntry.is_human_translation == False,
+                    TextEntry.created_at >= now - timedelta(hours=24)
+                ).count(),
+                "last_7_days": db.query(TextEntry).filter(
+                    TextEntry.is_human_translation == False,
+                    TextEntry.created_at >= now - timedelta(days=7)
+                ).count(),
+                "last_30_days": db.query(TextEntry).filter(
+                    TextEntry.is_human_translation == False,
+                    TextEntry.created_at >= now - timedelta(days=30)
+                ).count(),
+            },
+            "last_30_api_keys": db.query(APIKey).filter(
+                APIKey.last_used != None
+            ).order_by(APIKey.last_used.desc()).limit(30).all(),
+            "total_active_keys": db.query(APIKey).filter(APIKey.is_active == True).count(),
+            "total_users": db.query(User).count(),
+            "total_translations": db.query(TextEntry).count(),
+            "pending_manual_translations": db.query(TextEntry).filter(
+                TextEntry.is_human_translation == True,
+                TextEntry.updated_at == None
+            ).count(),
+        }
         
         # Get recent translations
         recent_translations = db.query(TextEntry)\
@@ -522,9 +554,7 @@ async def admin_dashboard(
             "admin_dashboard.html",
             {
                 "request": request,
-                "pending_count": pending_count,
-                "active_keys": active_keys,
-                "total_translations": total_translations,
+                "stats": stats,
                 "recent_translations": recent_translations,
                 "user": user,  # Make sure to pass the user to the template
                 "current_user": user  # Add this line to maintain consistency
