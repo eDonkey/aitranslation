@@ -1,0 +1,201 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Complete Your Registration - Enterprise Translation Solutions</title>
+    <script src="https://code.jquery.com/jquery-3.6.0.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/sweetalert2@11"></script>
+    <style>
+        /* Reuse your existing CSS variables and basic styles */
+        :root {
+            --primary: #2c3e50;
+            --secondary: #34495e;
+            --accent: #3498db;
+            --light: #ecf0f1;
+            --success: #27ae60;
+            --text: #2c3e50;
+        }
+
+        body {
+            font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+            line-height: 1.6;
+            color: var(--text);
+            background: var(--light);
+        }
+
+        .registration-container {
+            max-width: 600px;
+            margin: 2rem auto;
+            padding: 2rem;
+            background: white;
+            border-radius: 8px;
+            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+        }
+
+        .form-group {
+            margin-bottom: 1.5rem;
+        }
+
+        .form-group label {
+            display: block;
+            margin-bottom: 0.5rem;
+            font-weight: 500;
+        }
+
+        .form-control {
+            width: 100%;
+            padding: 0.75rem;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            font-size: 1rem;
+        }
+
+        .cta-button {
+            display: inline-block;
+            padding: 1rem 2rem;
+            background: var(--accent);
+            color: white;
+            text-decoration: none;
+            border-radius: 4px;
+            border: none;
+            cursor: pointer;
+            width: 100%;
+            font-size: 1rem;
+        }
+
+        .cta-button:hover {
+            background: #2980b9;
+        }
+
+        .optional-label {
+            color: #666;
+            font-size: 0.9rem;
+            margin-left: 0.5rem;
+        }
+    </style>
+</head>
+<body>
+    <div class="registration-container">
+        <h2>Complete Your Registration</h2>
+        <div id="planInfo" class="form-group">
+            <!-- Plan info will be populated here -->
+        </div>
+        
+        <form id="registrationForm">
+            <input type="hidden" id="selectedPlan" name="subscription_type">
+            
+            <div class="form-group">
+                <label for="username">Username</label>
+                <input type="text" class="form-control" id="username" name="username" required>
+            </div>
+
+            <div class="form-group">
+                <label for="email">Email</label>
+                <input type="email" class="form-control" id="email" name="email" required>
+            </div>
+
+            <div class="form-group">
+                <label for="password">Password</label>
+                <input type="password" class="form-control" id="password" name="password" required>
+            </div>
+
+            <button type="submit" class="cta-button">Continue to Payment</button>
+        </form>
+    </div>
+
+    <script>
+        $(document).ready(function() {
+            // Get plan from URL parameters
+            const urlParams = new URLSearchParams(window.location.search);
+            const plan = urlParams.get('plan');
+            
+            // Set plan info and display details
+            let planTitle, planPrice, modelPermission;
+            if (plan === 'basic-ai') {
+                planTitle = 'AI Translation Plan';
+                planPrice = '$49/month';
+                modelPermission = 'ai_only';
+                $('#selectedPlan').val('ai_translation');
+            } else if (plan === 'pro-human') {
+                planTitle = 'Professional Human Translation';
+                planPrice = '$199/month';
+                modelPermission = 'human_only';
+                $('#selectedPlan').val('human_translation');
+            }
+            
+            $('#planInfo').html(`
+                <h3>${planTitle}</h3>
+                <p>Selected Plan: ${planPrice}</p>
+            `);
+
+            $('#registrationForm').on('submit', function(e) {
+                e.preventDefault();
+                
+                const formData = new FormData();
+                formData.append('username', $('#username').val());
+                formData.append('email', $('#email').val());
+                formData.append('password', $('#password').val());
+                formData.append('is_admin', false);
+                formData.append('model_permission', modelPermission);
+                
+                $.ajax({
+                    url: '/api/admin/users',
+                    method: 'POST',
+                    data: formData,
+                    processData: false,
+                    contentType: false,
+                    success: function(response) {
+                        // Store the token immediately
+                        localStorage.setItem('access_token', response.access_token);
+                        
+                        // After successful registration and token storage, create subscription
+                        $.ajax({
+                            url: '/create-subscription',
+                            method: 'POST',
+                            contentType: 'application/json',
+                            headers: {
+                                'Authorization': 'Bearer ' + response.access_token
+                            },
+                            data: JSON.stringify({
+                                subscription_type: $('#selectedPlan').val()
+                            }),
+                            success: function(subscriptionResponse) {
+                                console.log('Subscription Response:', subscriptionResponse);
+                                if (subscriptionResponse.checkout_url) {
+                                    window.location.href = subscriptionResponse.checkout_url;
+                                } else {
+                                    console.error('No checkout URL in response:', subscriptionResponse);
+                                    Swal.fire({
+                                        title: 'Error!',
+                                        text: 'No checkout URL received',
+                                        icon: 'error',
+                                        html: `Debug info:<br>${JSON.stringify(subscriptionResponse, null, 2)}`
+                                    });
+                                }
+                            },
+                            error: function(xhr) {
+                                console.error('Subscription error:', xhr);
+                                Swal.fire({
+                                    title: 'Subscription Error!',
+                                    text: xhr.responseJSON?.detail || 'Error creating subscription',
+                                    icon: 'error',
+                                    html: `Debug info:<br>${JSON.stringify(xhr.responseJSON, null, 2)}`
+                                });
+                            }
+                        });
+                    },
+                    error: function(xhr) {
+                        console.error('Registration error:', xhr);
+                        Swal.fire({
+                            title: 'Registration Error!',
+                            text: xhr.responseJSON?.detail || 'Registration failed',
+                            icon: 'error'
+                        });
+                    }
+                });
+            });
+        });
+    </script>
+</body>
+</html> 

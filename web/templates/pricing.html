@@ -1,0 +1,130 @@
+{% extends "base.html" %}
+
+{% block content %}
+<div class="pricing-container">
+    <h1>Choose Your Translation Plan</h1>
+    
+    <div class="pricing-cards">
+        <div class="pricing-card">
+            <h2>AI Translation</h2>
+            <p class="price">${{ ai_price }}/month</p>
+            <ul>
+                <li>Instant AI-powered translations</li>
+                <li>Support for 6 languages</li>
+                <li>Unlimited translations</li>
+                <li>24/7 availability</li>
+            </ul>
+            {% if user %}
+                <button onclick="subscribe('ai_translation')">Subscribe Now</button>
+            {% else %}
+                <button onclick="window.location.href='/login?next=/pricing'">Login to Subscribe</button>
+                <p class="register-text">Don't have an account? <a href="/register">Register here</a></p>
+            {% endif %}
+        </div>
+        
+        <div class="pricing-card">
+            <h2>Human Translation</h2>
+            <p class="price">${{ human_price }}/month</p>
+            <ul>
+                <li>Professional human translators</li>
+                <li>Higher accuracy</li>
+                <li>Context-aware translations</li>
+                <li>Quality assurance</li>
+            </ul>
+            {% if user %}
+                <button onclick="subscribe('human_translation')">Subscribe Now</button>
+            {% else %}
+                <button onclick="window.location.href='/login?next=/pricing'">Login to Subscribe</button>
+                <p class="register-text">Don't have an account? <a href="/register">Register here</a></p>
+            {% endif %}
+        </div>
+    </div>
+</div>
+
+<script>
+async function subscribe(type) {
+    try {
+        const response = await fetch('/create-subscription', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json'
+            },
+            body: JSON.stringify({ subscription_type: type })
+        });
+        
+        const data = await response.json();
+        
+        if (data.init_point) {
+            window.location.href = data.init_point;
+        } else {
+            alert('Error creating subscription');
+        }
+    } catch (error) {
+        console.error('Error:', error);
+        alert('Error creating subscription');
+    }
+}
+</script>
+
+<style>
+.pricing-container {
+    max-width: 1200px;
+    margin: 0 auto;
+    padding: 2rem;
+}
+
+.pricing-cards {
+    display: flex;
+    justify-content: center;
+    gap: 2rem;
+    margin-top: 2rem;
+}
+
+.pricing-card {
+    background: white;
+    border-radius: 8px;
+    padding: 2rem;
+    box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+    text-align: center;
+    width: 300px;
+}
+
+.price {
+    font-size: 2rem;
+    font-weight: bold;
+    color: #2c3e50;
+    margin: 1rem 0;
+}
+
+button {
+    background: #3498db;
+    color: white;
+    border: none;
+    padding: 1rem 2rem;
+    border-radius: 4px;
+    cursor: pointer;
+    font-size: 1rem;
+    transition: background 0.3s;
+    margin-bottom: 1rem;
+}
+
+button:hover {
+    background: #2980b9;
+}
+
+.register-text {
+    font-size: 0.9rem;
+    color: #666;
+    margin-top: 0.5rem;
+}
+
+.register-text a {
+    color: #3498db;
+    text-decoration: none;
+}
+
+.register-text a:hover {
+    text-decoration: underline;
+}
+</style>
+{% endblock %} 
