@@ -1,130 +1,24 @@
-{% extends "base.html" %}
-
-{% block title %}Admin Dashboard{% endblock %}
-
-{% block content %}
-<div class="container">
-    <div class="row">
-        <div class="col-md-12">
-            <h1>Admin Dashboard</h1>
-            <h2>Statistics</h2>
-            <ul>
-                <li>Manual Translations (Last 24 Hours): {{ stats.manual_translations.last_24_hours }}</li>
-                <li>Manual Translations (Last 7 Days): {{ stats.manual_translations.last_7_days }}</li>
-                <li>Manual Translations (Last 30 Days): {{ stats.manual_translations.last_30_days }}</li>
-                <li>AI Translations (Last 24 Hours): {{ stats.ai_translations.last_24_hours }}</li>
-                <li>AI Translations (Last 7 Days): {{ stats.ai_translations.last_7_days }}</li>
-                <li>AI Translations (Last 30 Days): {{ stats.ai_translations.last_30_days }}</li>
-                <li>Total Active API Keys: {{ stats.total_active_keys }}</li>
-                <li>Total Users: {{ stats.total_users }}</li>
-                <li>Total Translations: {{ stats.total_translations }}</li>
-                <li>Pending Manual Translations: {{ stats.pending_manual_translations }}</li>
-            </ul>
-            <h2>Last 30 API Keys Used</h2>
-            <ul>
-                {% for key in stats.last_30_api_keys %}
-                    <li>{{ key.name }} - Last Used: {{ key.last_used }}</li>
-                {% endfor %}
-            </ul>
-            
-            <div class="row mb-4">
-                <div class="col-md-4">
-                    <div class="card">
-                        <div class="card-body">
-                            <h5 class="card-title">Pending Translations</h5>
-                            <h2>{{ pending_count }}</h2>
-                        </div>
-                    </div>
-                </div>
-                <div class="col-md-4">
-                    <div class="card">
-                        <div class="card-body">
-                            <h5 class="card-title">Active API Keys</h5>
-                            <h2>{{ active_keys }}</h2>
-                        </div>
-                    </div>
-                </div>
-                <div class="col-md-4">
-                    <div class="card">
-                        <div class="card-body">
-                            <h5 class="card-title">Total Translations</h5>
-                            <h2>{{ total_translations }}</h2>
-                        </div>
-                    </div>
-                </div>
-            </div>
-
-            <div class="card">
-                <div class="card-body">
-                    <h5 class="card-title">Recent Translations</h5>
-                    <div class="table-responsive">
-                        <table class="table">
-                            <thead>
-                                <tr>
-                                    <th>ID</th>
-                                    <th>Text</th>
-                                    <th>Created At</th>
-                                    <th>Status</th>
-                                </tr>
-                            </thead>
-                            <tbody>
-                                {% for translation in recent_translations %}
-                                <tr>
-                                    <td>{{ translation.id }}</td>
-                                    <td>
-                                        {% if translation.english %}
-                                            {{ translation.english[:50] }}...
-                                        {% elif translation.spanish %}
-                                            {{ translation.spanish[:50] }}...
-                                        {% elif translation.portuguese %}
-                                            {{ translation.portuguese[:50] }}...
-                                        {% elif translation.french %}
-                                            {{ translation.french[:50] }}...
-                                        {% elif translation.deutch %}
-                                            {{ translation.deutch[:50] }}...
-                                        {% elif translation.italian %}
-                                            {{ translation.italian[:50] }}...
-                                        {% else %}
-                                            No text available
-                                        {% endif %}
-                                    </td>
-                                    <td>{{ translation.created_at.strftime('%Y-%m-%d %H:%M:%S') }}</td>
-                                    <td>
-                                        {% if translation.updated_at %}
-                                            <span class="badge bg-success">Completed</span>
-                                        {% else %}
-                                            <span class="badge bg-warning">Pending</span>
-                                        {% endif %}
-                                    </td>
-                                </tr>
-                                {% endfor %}
-                            </tbody>
-                        </table>
-                    </div>
-                </div>
-            </div>
-        </div>
-    </div>
-</div>
-{% endblock %}
-
-{% block scripts %}
-<script>
-    // Add token to all fetch requests
-    const token = localStorage.getItem('access_token');
-    if (token) {
-        const originalFetch = window.fetch;
-        window.fetch = function() {
-            const args = Array.prototype.slice.call(arguments);
-            if (args[1] === undefined) {
-                args[1] = {};
-            }
-            if (args[1].headers === undefined) {
-                args[1].headers = {};
-            }
-            args[1].headers['Authorization'] = `Bearer ${token}`;
-            return originalFetch.apply(this, args);
-        };
-    }
-</script>
-{% endblock %}
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Admin Dashboard</title>
+</head>
+<body>
+    <h1>Admin Dashboard</h1>
+    <h2>Statistics</h2>
+    <ul>
+        <li>Manual Translations (Last 24 Hours): {{ stats.manual_translations.last_24_hours }}</li>
+        <li>Manual Translations (Last 7 Days): {{ stats.manual_translations.last_7_days }}</li>
+        <li>Manual Translations (Last 30 Days): {{ stats.manual_translations.last_30_days }}</li>
+        <li>AI Translations (Last 24 Hours): {{ stats.ai_translations.last_24_hours }}</li>
+        <li>AI Translations (Last 7 Days): {{ stats.ai_translations.last_7_days }}</li>
+        <li>AI Translations (Last 30 Days): {{ stats.ai_translations.last_30_days }}</li>
+    </ul>
+    <h2>Last 30 API Keys Used</h2>
+    <ul>
+        {% for key in stats.last_30_api_keys %}
+            <li>{{ key.name }} - Last Used: {{ key.last_used }}</li>
+        {% endfor %}
+    </ul>
+</body>
+</html>

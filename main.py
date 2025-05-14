@@ -475,7 +475,31 @@ async def admin_dashboard(
     request: Request,
     db: Session = Depends(get_db)
 ):
-    return HTMLResponse("<h1>Admin Dashboard Test</h1>")
+    # Example statistics (replace with actual queries)
+    stats = {
+        "manual_translations": {
+            "last_24_hours": 10,
+            "last_7_days": 50,
+            "last_30_days": 200,
+        },
+        "ai_translations": {
+            "last_24_hours": 20,
+            "last_7_days": 100,
+            "last_30_days": 400,
+        },
+        "last_30_api_keys": [
+            {"name": "Key 1", "last_used": "2025-05-13 10:00:00"},
+            {"name": "Key 2", "last_used": "2025-05-13 11:00:00"},
+        ],
+    }
+
+    return templates.TemplateResponse(
+        "admin_dashboard.html",
+        {
+            "request": request,
+            "stats": stats,
+        }
+    )
 
 @app.exception_handler(HTTPException)
 async def http_exception_handler(request: Request, exc: HTTPException):
