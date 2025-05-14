@@ -1044,6 +1044,96 @@ async def delete_user(
     db.commit()
     return {"message": "User deleted successfully"}
 
+@app.put("/api/users/change-password")
+async def change_password(
+    current_password: str = Form(...),
+    new_password: str = Form(...),
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """
+    Endpoint to allow users to change their password.
+    """
+    if not current_user:
+        raise HTTPException(
+            status_code=401,
+            detail="User not authenticated"
+        )
+    
+    # Verify the current password
+    if not verify_password(current_password, current_user.hashed_password):
+        raise HTTPException(
+            status_code=400,
+            detail="Current password is incorrect"
+        )
+    
+    # Hash the new password and update the user record
+    current_user.hashed_password = get_password_hash(new_password)
+    db.commit()
+    
+    return {"message": "Password updated successfully"}
+
+@app.post("/api/users/forgot-password")
+async def forgot_password(
+    email: str = Form(...),
+    new_password: str = Form(...),
+    reset_token: str = Form(...),
+    db: Session = Depends(get_db)
+):
+    """
+    Endpoint to reset a user's password using a reset token.
+    """
+    # Find the user by email
+    user = db.query(User).filter(User.email == email).first()
+    if not user:
+        raise HTTPException(
+            status_code=404,
+            detail="User with this email does not exist"
+        )
+    
+    # Verify the reset token (this assumes you have a token verification mechanism)
+    try:
+        payload = jwt.decode(reset_token, SECRET_KEY, algorithms=[ALGORITHM])
+        if payload.get("sub") != user.email:
+            raise HTTPException(
+                status_code=400,
+                detail="Invalid reset token"
+            )
+    except JWTError:
+        raise HTTPException(
+            status_code=400,
+            detail="Invalid or expired reset token"
+        )
+    
+    # Hash the new password and update the user record
+    user.hashed_password = get_password_hash(new_password)
+    db.commit()
+    
+    return {"message": "Password reset successfully"}
+
+@app.post("/api/users/request-password-reset")
+async def request_password_reset(
+    email: str = Form(...),
+    db: Session = Depends(get_db)
+):
+    """
+    Endpoint to request a password reset token.
+    """
+    user = db.query(User).filter(User.email == email).first()
+    if not user:
+        raise HTTPException(
+            status_code=404,
+            detail="User with this email does not exist"
+        )
+    
+    # Generate a reset token
+    reset_token = create_access_token(data={"sub": user.email})
+    
+    # Send the token via email (implement your email-sending logic here)
+    # Example: send_email(user.email, "Password Reset", f"Your reset token: {reset_token}")
+    
+    return {"message": "Password reset token sent to your email"}
+
 @app.middleware("http")
 async def authenticate_user_middleware(request: Request, call_next):
     # Skip authentication for login and static routes
