@@ -1132,7 +1132,7 @@ async def request_password_reset(
     # Send the token via email (implement your email-sending logic here)
     # Example: send_email(user.email, "Password Reset", f"Your reset token: {reset_token}")
     
-    return {"message": "Password reset token generated: ".reset_token}
+    return {"message": f"Password reset token generated: {reset_token}"}
 
 @app.middleware("http")
 async def authenticate_user_middleware(request: Request, call_next):
