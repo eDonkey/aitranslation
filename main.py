@@ -20,6 +20,9 @@ from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
 from jose import JWTError, jwt
 from starlette.status import HTTP_303_SEE_OTHER, HTTP_307_TEMPORARY_REDIRECT
 import bcrypt
+import logging
+
+logger = logging.getLogger("uvicorn.error")
 
 openai.api_key = os.getenv("OPENAI_API_KEY")
 
@@ -405,10 +408,7 @@ async def get_current_active_admin(
     if not current_user:
         return RedirectResponse(url="/login", status_code=303)
     if not current_user.is_active:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Inactive user"
-        )
+        return JSONResponse(status_code=403, content={"detail": "User account is inactive"})
     if not current_user.is_admin:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
@@ -424,10 +424,7 @@ async def login_for_access_token(
 ):
     user = db.query(User).filter(User.username == form_data.username).first()
     if not user or not verify_password(form_data.password, user.hashed_password):
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Incorrect username or password"
-        )
+        return JSONResponse(status_code=401, content={"detail": "Incorrect username or password"})
     
     if not user.is_active:
         raise HTTPException(
@@ -463,6 +460,11 @@ async def login_for_access_token(
         response.status_code = status.HTTP_303_SEE_OTHER
     
     return response
+
+@app.post("/token")
+async def login(form_data: OAuth2PasswordRequestForm = Depends()):
+    logger.info(f"Login attempt: {form_data.username}")
+    # Your authentication logic here
 
 @app.get("/login", response_class=HTMLResponse)
 async def login_page(request: Request):
