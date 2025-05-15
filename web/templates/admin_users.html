@@ -16,7 +16,10 @@
     <div class="accordion">
         <button class="accordion-toggle" onclick="toggleAccordion()">➤ Create New User</button>
         <div class="accordion-content" id="create-user-form">
-            <form method="POST" action="/api/admin/users" class="create-user-form">
+            <!-- Success/Error Messages -->
+            <div id="message" style="display: none; margin-bottom: 1rem;"></div>
+
+            <form id="create-user-form-element" class="create-user-form">
                 <label for="username">Username:</label>
                 <input type="text" id="username" name="username" required>
 
@@ -44,7 +47,7 @@
 
     <!-- List of Users -->
     <h3>Existing Users</h3>
-    <table>
+    <table id="user-list">
         <thead>
             <tr>
                 <th>ID</th>
@@ -66,10 +69,6 @@
                 <td>{{ "Yes" if user.is_active else "No" }}</td>
                 <td>{{ user.model_permission }}</td>
                 <td>
-                    <form method="POST" action="/api/admin/users/{{ user.id }}" style="display:inline;">
-                        <input type="hidden" name="_method" value="PUT">
-                        <button type="submit">Update</button>
-                    </form>
                     <form method="POST" action="/api/admin/users/{{ user.id }}" style="display:inline;">
                         <input type="hidden" name="_method" value="DELETE">
                         <button type="submit">Block</button>
@@ -93,6 +92,7 @@
 </body>
 
 <script>
+    // Toggle accordion for the create user form
     function toggleAccordion() {
         const form = document.getElementById('create-user-form');
         const toggleButton = document.querySelector('.accordion-toggle');
@@ -102,6 +102,67 @@
         } else {
             form.style.display = 'block';
             toggleButton.textContent = '▼ Create New User';
+        }
+    }
+
+    // Handle form submission for creating a user
+    document.getElementById('create-user-form-element').addEventListener('submit', async function (event) {
+        event.preventDefault(); // Prevent default form submission
+
+        const form = event.target;
+        const formData = new FormData(form);
+
+        // Send the form data to the server
+        try {
+            const response = await fetch('/api/admin/users', {
+                method: 'POST',
+                body: formData,
+            });
+
+            const result = await response.json();
+
+            const messageDiv = document.getElementById('message');
+            if (response.ok) {
+                // Success: Show success message, clear form, and refresh user list
+                messageDiv.style.display = 'block';
+                messageDiv.style.color = 'green';
+                messageDiv.textContent = result.message;
+
+                form.reset(); // Clear the form
+                refreshUserList(); // Refresh the user list
+            } else {
+                // Error: Show error message
+                messageDiv.style.display = 'block';
+                messageDiv.style.color = 'red';
+                messageDiv.textContent = result.detail || 'An error occurred while creating the user.';
+            }
+        } catch (error) {
+            console.error('Error:', error);
+        }
+    });
+
+    // Function to refresh the user list
+    async function refreshUserList() {
+        try {
+            const response = await fetch('/admin/users?page=1', {
+                method: 'GET',
+                headers: {
+                    'X-Requested-With': 'XMLHttpRequest',
+                },
+            });
+
+            if (response.ok) {
+                const html = await response.text();
+                const parser = new DOMParser();
+                const doc = parser.parseFromString(html, 'text/html');
+                const newTableBody = doc.querySelector('#user-list tbody');
+
+                // Replace the current table body with the new one
+                const currentTableBody = document.querySelector('#user-list tbody');
+                currentTableBody.innerHTML = newTableBody.innerHTML;
+            }
+        } catch (error) {
+            console.error('Error refreshing user list:', error);
         }
     }
 </script>

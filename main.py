@@ -355,6 +355,54 @@ async def delete_api_key(
     
     return {"message": "API key deactivated successfully"}
 
+# Helper function to get the current active admin user
+async def get_current_active_admin(
+    request: Request
+) -> User:
+    current_user = getattr(request.state, "user", None)
+    if not current_user:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+    if not current_user.is_active:
+        raise HTTPException(status_code=403, detail="Inactive user")
+    if not current_user.is_admin:
+        raise HTTPException(status_code=403, detail="Not an admin")
+    return current_user
+
+@app.put("/api/admin/api-keys/{key_id}/toggle")
+async def toggle_api_key_status(
+    key_id: int,
+    current_user: User = Depends(get_current_active_admin),
+    db: Session = Depends(get_db)
+):
+    api_key = db.query(APIKey).filter(APIKey.id == key_id).first()
+    if not api_key:
+        raise HTTPException(status_code=404, detail="API key not found")
+    
+    # Toggle the active status
+    api_key.is_active = not api_key.is_active
+    db.commit()
+    return {"message": f"API key {'activated' if api_key.is_active else 'deactivated'} successfully"}
+
+@app.get("/api/admin/api-keys/{key_id}/stats")
+async def get_api_key_stats(
+    key_id: int,
+    current_user: User = Depends(get_current_active_admin),
+    db: Session = Depends(get_db)
+):
+    api_key = db.query(APIKey).filter(APIKey.id == key_id).first()
+    if not api_key:
+        raise HTTPException(status_code=404, detail="API key not found")
+    
+    # Fetch stats for the API key
+    usage_count = db.query(TextEntry).filter(TextEntry.apikey_requested == api_key.key).count()
+    last_used = api_key.last_used  # Ensure this field exists in your database model
+    return {
+        "name": api_key.name,
+        "usage_count": usage_count,
+        "last_used": last_used.isoformat() if last_used else None,
+        "is_active": api_key.is_active
+    }
+
 openai.api_key = os.getenv("OPENAI_API_KEY")
 
 templates = Jinja2Templates(directory="web/templates")
@@ -406,14 +454,11 @@ async def get_current_active_admin(
     current_user: Optional[User] = Depends(get_current_user)
 ) -> User:
     if not current_user:
-        return RedirectResponse(url="/login", status_code=303)
+        raise HTTPException(status_code=401, detail="Not authenticated")
     if not current_user.is_active:
-        return JSONResponse(status_code=403, content={"detail": "User account is inactive"})
+        raise HTTPException(status_code=403, detail="Inactive user")
     if not current_user.is_admin:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Not enough privileges"
-        )
+        raise HTTPException(status_code=403, detail="Not an admin")
     return current_user
 
 # Authentication routes
@@ -592,11 +637,13 @@ async def admin_home(
 @app.get("/admin/keys", response_class=HTMLResponse)
 async def admin_keys(
     request: Request,
-    current_user: User = Depends(get_current_active_admin)
+    current_user: User = Depends(get_current_active_admin),
+    db: Session = Depends(get_db)
 ):
+    api_keys = db.query(APIKey).all()
     return templates.TemplateResponse("admin_keys.html", {
         "request": request,
-        "user": current_user
+        "api_keys": api_keys
     })
 
 @app.get("/client", response_class=HTMLResponse)

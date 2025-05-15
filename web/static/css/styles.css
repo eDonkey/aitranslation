@@ -295,3 +295,90 @@ body.admin-users .pagination span {
     background-color: #f8f9fa;
     box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
 }
+
+/* Tooltip styles */
+.tooltip {
+    position: relative;
+    cursor: pointer;
+    color: #007bff;
+    text-decoration: underline;
+}
+
+.tooltip-content {
+    position: fixed; /* Fixed position to float in the center */
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    background-color: #6bb6c6;
+    color: white;
+    padding: 1rem;
+    border-radius: 13px;
+    white-space: pre-wrap; /* Allow multi-line content */
+    z-index: 1000; /* Ensure it appears above other elements */
+    display: none;
+    box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+    max-width: 400px; /* Prevent the tooltip from being too wide */
+    text-align: center;
+}
+
+.info-button {
+    background-color: transparent;
+    color: #007bff;
+    border: none;
+    cursor: pointer;
+    text-decoration: underline;
+    font-size: 0.9rem;
+    margin-left: 0.5rem;
+}
+
+.info-button:hover {
+    color: #0056b3;
+}
+
+/* Styles for the API keys table */
+body.admin-keys table {
+    width: 100%;
+    border-collapse: collapse;
+    margin-top: 2rem;
+    background-color: #f8f9fa;
+    border: 1px solid #ddd;
+    border-radius: 8px;
+    overflow: hidden;
+    box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+}
+
+body.admin-keys table th,
+body.admin-keys table td {
+    padding: 1rem;
+    text-align: left;
+    border-bottom: 1px solid #ddd;
+}
+
+body.admin-keys table th {
+    background-color: #007bff;
+    color: white;
+    font-weight: bold;
+    text-transform: uppercase;
+}
+
+body.admin-keys table tr:nth-child(even) {
+    background-color: #f2f2f2;
+}
+
+body.admin-keys table tr:hover {
+    background-color: #e9ecef;
+}
+
+body.admin-keys table td button {
+    background-color: #007bff;
+    color: white;
+    border: none;
+    border-radius: 4px;
+    padding: 0.5rem 1rem;
+    cursor: pointer;
+    transition: background-color 0.2s ease;
+}
+
+body.admin-keys table td button:hover {
+    background-color: #0056b3;
+}
