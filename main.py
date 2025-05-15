@@ -1,8 +1,8 @@
-from fastapi import FastAPI, Header, HTTPException, Depends, Request, Form, Path
-from fastapi.responses import HTMLResponse, FileResponse, RedirectResponse
+from fastapi import FastAPI, Header, HTTPException, Depends, Request, Form, Path, status, Query
+from fastapi.responses import HTMLResponse, FileResponse, RedirectResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
-from sqlalchemy import create_engine, Column, Integer, String, Text, TIMESTAMP, text, Boolean
+from sqlalchemy import create_engine, Column, Integer, String, Text, TIMESTAMP, text, Boolean, DateTime, func
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker, Session
 from typing import Optional, List
@@ -15,6 +15,14 @@ from dotenv import load_dotenv
 import openai
 from secrets import token_urlsafe
 from fastapi.middleware.cors import CORSMiddleware
+from passlib.context import CryptContext
+from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
+from jose import JWTError, jwt
+from starlette.status import HTTP_303_SEE_OTHER, HTTP_307_TEMPORARY_REDIRECT
+import bcrypt
+import logging
+
+logger = logging.getLogger("uvicorn.error")
 
 openai.api_key = os.getenv("OPENAI_API_KEY")
 
@@ -58,15 +66,16 @@ class TextEntry(Base):
     __tablename__ = "text_entries"
 
     id = Column(Integer, primary_key=True, index=True)
-    english = Column(Text, nullable=True)
-    spanish = Column(Text, nullable=True)
-    portuguese = Column(Text, nullable=True)
-    french = Column(Text, nullable=True)
-    deutch = Column(Text, nullable=True)
-    italian = Column(Text, nullable=True)
-    created_at = Column(TIMESTAMP, nullable=False, server_default=text('CURRENT_TIMESTAMP'))
-    updated_at = Column(TIMESTAMP, nullable=True, onupdate=text('CURRENT_TIMESTAMP'))
-    apikey_requested = Column(String, nullable=False)
+    english = Column(String)
+    spanish = Column(String)
+    portuguese = Column(String)
+    french = Column(String)
+    deutch = Column(String)
+    italian = Column(String)
+    apikey_requested = Column(String)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, nullable=True)
+    is_human_translation = Column(Boolean, default=False)
 
 class APIKey(Base):
     __tablename__ = "api_keys"
@@ -77,6 +86,25 @@ class APIKey(Base):
     created_at = Column(TIMESTAMP, nullable=False, server_default=text('CURRENT_TIMESTAMP'))
     last_used = Column(TIMESTAMP, nullable=True)
     is_active = Column(Boolean, default=True)
+
+class ModelPermission(str, Enum):
+    AI_ONLY = "ai_only"
+    HUMAN_ONLY = "human_only"
+    BOTH = "both"
+    NONE = "none"
+
+class User(Base):
+    __tablename__ = "users"
+
+    id = Column(Integer, primary_key=True, index=True)
+    username = Column(String, unique=True, index=True)
+    email = Column(String, unique=True, index=True)
+    hashed_password = Column(String)
+    is_active = Column(Boolean, default=True)
+    is_admin = Column(Boolean, default=False)
+    model_permission = Column(String, default=ModelPermission.NONE)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    api_key = Column(String, unique=True, nullable=True)
 
 # Create tables
 Base.metadata.create_all(bind=engine)
@@ -123,7 +151,6 @@ async def save_text(
     db: Session = Depends(get_db),
     api_key: str = Depends(validate_api_key)
 ):
-    # Create new text entry with all fields initially None
     db_text = TextEntry(
         english=None,
         spanish=None,
@@ -133,8 +160,6 @@ async def save_text(
         italian=None,
         apikey_requested=api_key
     )
-    
-    # Set the text for the specified language
     setattr(db_text, request.language.value, request.text)
     
     db.add(db_text)
@@ -163,9 +188,51 @@ async def translate_text(
     text: str = Form(...),
     language: Language = Form(...),
     db: Session = Depends(get_db),
-    api_key: str = Depends(validate_api_key)
+    api_key: str = Header(..., alias="X-API-Key")
 ):
     try:
+        # Check if this is a trial request
+        if api_key == 'trial-key':
+            # For trial requests, just do the translation without DB storage
+            translations = {}
+            all_languages = [lang for lang in Language]
+            
+            # Translate to all languages except the source language
+            for target_lang in all_languages:
+                if target_lang == language:
+                    continue
+                    
+                prompt = f"Translate this text from {language} to {target_lang}:\n{text}"
+                
+                response = openai.chat.completions.create(
+                    model="gpt-3.5-turbo",
+                    messages=[
+                        {"role": "system", "content": "You are a professional translator."},
+                        {"role": "user", "content": prompt}
+                    ]
+                )
+                
+                translated_text = response.choices[0].message.content
+                translations[target_lang] = translated_text
+            
+            return {
+                "original_text": text,
+                "original_language": language,
+                "translations": translations
+            }
+        
+        # For authenticated requests, continue with the existing logic
+        db_key = db.query(APIKey).filter(
+            APIKey.key == api_key,
+            APIKey.is_active == True
+        ).first()
+        
+        if not db_key:
+            raise HTTPException(
+                status_code=401,
+                detail="Invalid API Key"
+            )
+        
         # Create new text entry
         db_text = TextEntry(
             apikey_requested=api_key
@@ -181,11 +248,10 @@ async def translate_text(
         # Translate to all languages except the source language
         for target_lang in all_languages:
             if target_lang == language:
-                continue  # Skip the source language
+                continue
                 
             prompt = f"Translate this text from {language} to {target_lang}:\n{text}"
             
-            # Call OpenAI API
             response = openai.chat.completions.create(
                 model="gpt-3.5-turbo",
                 messages=[
@@ -213,7 +279,7 @@ async def translate_text(
             "translations": translations,
             "id": db_text.id
         }
-        
+            
     except Exception as e:
         raise HTTPException(
             status_code=500,
@@ -289,6 +355,54 @@ async def delete_api_key(
     
     return {"message": "API key deactivated successfully"}
 
+# Helper function to get the current active admin user
+async def get_current_active_admin(
+    request: Request
+) -> User:
+    current_user = getattr(request.state, "user", None)
+    if not current_user:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+    if not current_user.is_active:
+        raise HTTPException(status_code=403, detail="Inactive user")
+    if not current_user.is_admin:
+        raise HTTPException(status_code=403, detail="Not an admin")
+    return current_user
+
+@app.put("/api/admin/api-keys/{key_id}/toggle")
+async def toggle_api_key_status(
+    key_id: int,
+    current_user: User = Depends(get_current_active_admin),
+    db: Session = Depends(get_db)
+):
+    api_key = db.query(APIKey).filter(APIKey.id == key_id).first()
+    if not api_key:
+        raise HTTPException(status_code=404, detail="API key not found")
+    
+    # Toggle the active status
+    api_key.is_active = not api_key.is_active
+    db.commit()
+    return {"message": f"API key {'activated' if api_key.is_active else 'deactivated'} successfully"}
+
+@app.get("/api/admin/api-keys/{key_id}/stats")
+async def get_api_key_stats(
+    key_id: int,
+    current_user: User = Depends(get_current_active_admin),
+    db: Session = Depends(get_db)
+):
+    api_key = db.query(APIKey).filter(APIKey.id == key_id).first()
+    if not api_key:
+        raise HTTPException(status_code=404, detail="API key not found")
+    
+    # Fetch stats for the API key
+    usage_count = db.query(TextEntry).filter(TextEntry.apikey_requested == api_key.key).count()
+    last_used = api_key.last_used  # Ensure this field exists in your database model
+    return {
+        "name": api_key.name,
+        "usage_count": usage_count,
+        "last_used": last_used.isoformat() if last_used else None,
+        "is_active": api_key.is_active
+    }
+
 openai.api_key = os.getenv("OPENAI_API_KEY")
 
 templates = Jinja2Templates(directory="web/templates")
@@ -296,19 +410,296 @@ app.mount("/static", StaticFiles(directory="web/static"), name="static")
 
 @app.get("/", response_class=HTMLResponse)
 async def home(request: Request):
-    return templates.TemplateResponse("traductor.html", {"request": request})
+    return templates.TemplateResponse("traductor.html", {
+        "request": request,
+        # Add any additional context data here if needed
+    })
+
+# Authentication constants and dependencies
+SECRET_KEY = os.getenv("SECRET_KEY", "your-secret-key-here")
+ALGORITHM = "HS256"
+ACCESS_TOKEN_EXPIRE_MINUTES = 30
+
+pwd_context = CryptContext(
+    schemes=["bcrypt"],
+    deprecated="auto",
+    bcrypt__rounds=12
+)
+
+oauth2_scheme = OAuth2PasswordBearer(
+    tokenUrl="token",
+    auto_error=False
+)
+
+# Authentication helper functions
+def verify_password(plain_password, hashed_password):
+    return pwd_context.verify(plain_password, hashed_password)
+
+def get_password_hash(password):
+    return pwd_context.hash(password)
+
+def create_access_token(data: dict):
+    to_encode = data.copy()
+    expire = datetime.utcnow() + timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
+    to_encode.update({"exp": expire})
+    encoded_jwt = jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
+    return encoded_jwt
+
+# User authentication functions
+async def get_current_user(request: Request) -> Optional[User]:
+    return getattr(request.state, "user", None)
+
+async def get_current_active_admin(
+    request: Request,
+    current_user: Optional[User] = Depends(get_current_user)
+) -> User:
+    if not current_user:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+    if not current_user.is_active:
+        raise HTTPException(status_code=403, detail="Inactive user")
+    if not current_user.is_admin:
+        raise HTTPException(status_code=403, detail="Not an admin")
+    return current_user
+
+# Authentication routes
+@app.post("/token")
+async def login_for_access_token(
+    form_data: OAuth2PasswordRequestForm = Depends(),
+    db: Session = Depends(get_db)
+):
+    user = db.query(User).filter(User.username == form_data.username).first()
+    if not user or not verify_password(form_data.password, user.hashed_password):
+        return JSONResponse(status_code=401, content={"detail": "Incorrect username or password"})
+    
+    if not user.is_active:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="User account is inactive"
+        )
+    
+    access_token = create_access_token(data={"sub": user.username})
+    
+    # Create response based on user type
+    response_data = {
+        "access_token": access_token,
+        "token_type": "bearer",
+        "is_admin": user.is_admin,
+        "username": user.username
+    }
+    
+    response = JSONResponse(response_data)
+    
+    # Set cookie with token
+    response.set_cookie(
+        key="access_token",
+        value=f"Bearer {access_token}",
+        httponly=True,
+        secure=True,
+        samesite="lax",
+        max_age=1800  # 30 minutes
+    )
+    
+    # If not admin, redirect to appropriate page
+    if not user.is_admin:
+        response.headers["Location"] = "/client"
+        response.status_code = status.HTTP_303_SEE_OTHER
+    
+    return response
+
+@app.post("/token")
+async def login(form_data: OAuth2PasswordRequestForm = Depends()):
+    logger.info(f"Login attempt: {form_data.username}")
+    # Your authentication logic here
+
+@app.get("/login", response_class=HTMLResponse)
+async def login_page(request: Request):
+    return templates.TemplateResponse("login.html", {"request": request})
+
+@app.get("/admin/dashboard", response_class=HTMLResponse)
+async def admin_dashboard(
+    request: Request,
+    db: Session = Depends(get_db)
+):
+    from datetime import datetime, timedelta
+
+    # Current time
+    now = datetime.utcnow()
+
+    # Fetch statistics from the database
+    stats = {
+        "manual_translations": {
+            "last_24_hours": db.query(TextEntry).filter(
+                TextEntry.is_human_translation == True,
+                TextEntry.updated_at >= now - timedelta(hours=24)
+            ).count(),
+            "last_7_days": db.query(TextEntry).filter(
+                TextEntry.is_human_translation == True,
+                TextEntry.updated_at >= now - timedelta(days=7)
+            ).count(),
+            "last_30_days": db.query(TextEntry).filter(
+                TextEntry.is_human_translation == True,
+                TextEntry.updated_at >= now - timedelta(days=30)
+            ).count(),
+        },
+        "ai_translations": {
+            "last_24_hours": db.query(TextEntry).filter(
+                TextEntry.is_human_translation == False,
+                TextEntry.created_at >= now - timedelta(hours=24)
+            ).count(),
+            "last_7_days": db.query(TextEntry).filter(
+                TextEntry.is_human_translation == False,
+                TextEntry.created_at >= now - timedelta(days=7)
+            ).count(),
+            "last_30_days": db.query(TextEntry).filter(
+                TextEntry.is_human_translation == False,
+                TextEntry.created_at >= now - timedelta(days=30)
+            ).count(),
+        },
+        "top_10_api_keys": db.query(
+            APIKey.name, 
+            func.count(TextEntry.id).label("usage_count")
+        )
+        .join(TextEntry, TextEntry.apikey_requested == APIKey.key)
+        .group_by(APIKey.name)
+        .order_by(func.count(TextEntry.id).desc())
+        .limit(10)
+        .all(),
+    }
+
+    # Render the template with real data
+    return templates.TemplateResponse(
+        "admin_dashboard.html",
+        {
+            "request": request,
+            "stats": stats,
+        }
+    )
+
+@app.exception_handler(HTTPException)
+async def http_exception_handler(request: Request, exc: HTTPException):
+    if exc.status_code in (status.HTTP_401_UNAUTHORIZED, status.HTTP_403_FORBIDDEN):
+        if request.url.path.startswith("/api/"):
+            return JSONResponse(
+                status_code=exc.status_code,
+                content={"detail": exc.detail},
+                headers=exc.headers
+            )
+        return RedirectResponse(
+            url="/login",
+            status_code=status.HTTP_303_SEE_OTHER
+        )
+    
+    return JSONResponse(
+        status_code=exc.status_code,
+        content={"detail": exc.detail}
+    )
+
+# Bootstrap admin route for initial setup
+@app.post("/bootstrap-admin")
+async def bootstrap_admin(
+    username: str = Form(...),
+    email: str = Form(...),
+    password: str = Form(...),
+    db: Session = Depends(get_db)
+):
+    # Check if any users exist
+    user_count = db.query(User).count()
+    if user_count > 0:
+        raise HTTPException(
+            status_code=400,
+            detail="Admin user already exists. Bootstrap is only for initial setup."
+        )
+    
+    # Create the first admin user
+    db_user = User(
+        username=username,
+        email=email,
+        hashed_password=get_password_hash(password),
+        is_admin=True,
+        is_active=True
+    )
+    db.add(db_user)
+    db.commit()
+    db.refresh(db_user)
+    
+    return {"message": "Admin user created successfully"}
 
 @app.get("/admin", response_class=HTMLResponse)
-async def admin_home(request: Request):
-    return templates.TemplateResponse("admin_home.html", {"request": request})
+async def admin_home(
+    request: Request,
+    current_user: User = Depends(get_current_active_admin)
+):
+    return templates.TemplateResponse("admin_home.html", {
+        "request": request,
+        "user": current_user
+    })
 
 @app.get("/admin/keys", response_class=HTMLResponse)
-async def admin_keys(request: Request):
-    return templates.TemplateResponse("admin_keys.html", {"request": request})
+async def admin_keys(
+    request: Request,
+    current_user: User = Depends(get_current_active_admin),
+    db: Session = Depends(get_db)
+):
+    api_keys = db.query(APIKey).all()
+    return templates.TemplateResponse("admin_keys.html", {
+        "request": request,
+        "api_keys": api_keys
+    })
 
 @app.get("/client", response_class=HTMLResponse)
-async def client_dashboard(request: Request):
-    return templates.TemplateResponse("client_dashboard.html", {"request": request})
+async def client_dashboard(
+    request: Request,
+    db: Session = Depends(get_db)
+):
+    # Get token from cookie
+    auth_cookie = request.cookies.get('access_token')
+    if not auth_cookie or not auth_cookie.startswith('Bearer '):
+        return RedirectResponse(url="/login", status_code=303)
+    
+    token = auth_cookie.split(' ')[1]
+    
+    try:
+        # Decode token
+        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+        username = payload.get("sub")
+        if not username:
+            return RedirectResponse(url="/login", status_code=303)
+        
+        # Get user
+        user = db.query(User).filter(User.username == username).first()
+        if not user:
+            return RedirectResponse(url="/login", status_code=303)
+
+        # Get user's translations
+        translations = db.query(TextEntry)\
+            .filter(TextEntry.apikey_requested == user.api_key)\
+            .order_by(TextEntry.created_at.desc())\
+            .all()
+
+        response = templates.TemplateResponse(
+            "client_dashboard.html",  # Make sure this matches your template filename
+            {
+                "request": request,
+                "user": user,
+                "translations": translations or []  # Ensure translations is never None
+            }
+        )
+        
+        # Ensure token is refreshed in cookie
+        response.set_cookie(
+            key="access_token",
+            value=f"Bearer {token}",
+            httponly=True,
+            secure=True,
+            samesite="lax",
+            max_age=1800  # 30 minutes
+        )
+        
+        return response
+        
+    except Exception as e:
+        print(f"Client dashboard error: {str(e)}")  # Debug print
+        return RedirectResponse(url="/login", status_code=303)
 
 @app.get("/api/admin/statistics")
 async def get_statistics(
@@ -426,8 +817,34 @@ async def save_human_translation(
     return {"message": "Translation saved successfully"}
 
 @app.get("/admin/human-translations", response_class=HTMLResponse)
-async def human_translations_dashboard(request: Request):
-    return templates.TemplateResponse("human_translations.html", {"request": request})
+async def admin_human_translations(
+    request: Request,
+    current_user: User = Depends(get_current_active_admin),
+    db: Session = Depends(get_db)
+):
+    # Get pending human translations
+    pending_translations = db.query(TextEntry)\
+        .filter(TextEntry.is_human_translation == True)\
+        .filter(TextEntry.updated_at == None)\
+        .order_by(TextEntry.created_at.desc())\
+        .all()
+    
+    # Get completed human translations
+    completed_translations = db.query(TextEntry)\
+        .filter(TextEntry.is_human_translation == True)\
+        .filter(TextEntry.updated_at != None)\
+        .order_by(TextEntry.updated_at.desc())\
+        .all()
+    
+    return templates.TemplateResponse(
+        "admin_human_translations.html",
+        {
+            "request": request,
+            "user": current_user,
+            "pending_translations": pending_translations,
+            "completed_translations": completed_translations
+        }
+    )
 
 @app.get("/get-text/{text_id}")
 async def get_text_by_id(
@@ -490,6 +907,342 @@ async def get_text_by_id(
 
     return result
 
+@app.post("/admin/create-user")
+async def create_user(
+    username: str = Form(...),
+    email: str = Form(...),
+    password: str = Form(...),
+    is_admin: bool = Form(False),
+    current_user: User = Depends(get_current_active_admin),
+    db: Session = Depends(get_db)
+):
+    db_user = User(
+        username=username,
+        email=email,
+        hashed_password=get_password_hash(password),
+        is_admin=is_admin
+    )
+    db.add(db_user)
+    db.commit()
+    db.refresh(db_user)
+    return {"message": "User created successfully"}
+
+@app.middleware("http")
+async def add_cors_headers(request: Request, call_next):
+    response = await call_next(request)
+    response.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
+    response.headers["Pragma"] = "no-cache"
+    response.headers["Expires"] = "0"
+    return response
+
+@app.get("/admin/users", response_class=HTMLResponse)
+async def admin_users_page(
+    request: Request,
+    current_user: User = Depends(get_current_active_admin),
+    db: Session = Depends(get_db),
+    page: int = Query(1, gt=0),  # Default to page 1
+    search: str = Query(None)   # Optional search query
+):
+    query = db.query(User)
+    
+    # Apply search filter if provided
+    if search:
+        query = query.filter(
+            (User.username.ilike(f"%{search}%")) | (User.email.ilike(f"%{search}%"))
+        )
+    
+    # Pagination
+    total_users = query.count()
+    users = query.offset((page - 1) * 25).limit(25).all()
+    
+    return templates.TemplateResponse(
+        "admin_users.html",
+        {
+            "request": request,
+            "users": users,
+            "total_users": total_users,
+            "current_page": page,
+            "search_query": search,
+        }
+    )
+
+@app.post("/api/admin/users")
+async def create_new_user(
+    username: str = Form(...),
+    email: str = Form(...),
+    password: str = Form(...),
+    is_admin: bool = Form(False),
+    model_permission: ModelPermission = Form(ModelPermission.BOTH),
+    current_user: User = Depends(get_current_active_admin),
+    db: Session = Depends(get_db)
+):
+    try:
+        # Check if username or email already exists
+        if db.query(User).filter(User.username == username).first():
+            raise HTTPException(status_code=400, detail="Username already registered")
+        if db.query(User).filter(User.email == email).first():
+            raise HTTPException(status_code=400, detail="Email already registered")
+        
+        # Generate API key if permissions are granted
+        api_key = None
+        if model_permission != ModelPermission.NONE:
+            api_key = token_urlsafe(32)
+            
+            # Create API key entry
+            db_key = APIKey(
+                key=api_key,
+                name=f"Key for {username}",
+                is_active=True,
+                created_at=datetime.utcnow()
+            )
+            db.add(db_key)
+            try:
+                db.flush()  # Ensure the API key is created before linking to user
+            except Exception as e:
+                db.rollback()
+                raise HTTPException(
+                    status_code=500,
+                    detail=f"Error creating API key: {str(e)}"
+                )
+        
+        # Create new user
+        new_user = User(
+            username=username,
+            email=email,
+            hashed_password=get_password_hash(password),
+            is_admin=is_admin,
+            is_active=True,
+            model_permission=model_permission,
+            api_key=api_key,  # Link the API key to the user
+            created_at=datetime.utcnow()
+        )
+        
+        db.add(new_user)
+        try:
+            db.commit()
+            db.refresh(new_user)
+        except Exception as e:
+            db.rollback()
+            raise HTTPException(
+                status_code=500,
+                detail=f"Error creating user: {str(e)}"
+            )
+        
+        return {
+            "message": "User created successfully",
+            "api_key": api_key,
+            "permissions": model_permission
+        }
+        
+    except Exception as e:
+        print(f"Error creating user: {str(e)}")
+        db.rollback()
+        raise HTTPException(
+            status_code=500,
+            detail=f"Error creating user: {str(e)}"
+        )
+
+@app.put("/api/admin/users/{user_id}")
+async def update_user(
+    user_id: int,
+    is_active: bool = Form(...),
+    is_admin: bool = Form(...),
+    current_user: User = Depends(get_current_active_admin),
+    db: Session = Depends(get_db)
+):
+    # Prevent self-modification
+    if user_id == current_user.id:
+        raise HTTPException(
+            status_code=400,
+            detail="Cannot modify your own admin status"
+        )
+    
+    user = db.query(User).filter(User.id == user_id).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+    
+    user.is_active = is_active
+    user.is_admin = is_admin
+    db.commit()
+    return {"message": "User updated successfully"}
+
+@app.delete("/api/admin/users/{user_id}")
+async def delete_user(
+    user_id: int,
+    current_user: User = Depends(get_current_active_admin),
+    db: Session = Depends(get_db)
+):
+    # Prevent self-deletion
+    if user_id == current_user.id:
+        raise HTTPException(
+            status_code=400,
+            detail="Cannot delete your own account"
+        )
+    
+    user = db.query(User).filter(User.id == user_id).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+    
+    db.delete(user)
+    db.commit()
+    return {"message": "User deleted successfully"}
+
+@app.put("/api/users/change-password")
+async def change_password(
+    current_password: str = Form(...),
+    new_password: str = Form(...),
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """
+    Endpoint to allow users to change their password.
+    """
+    if not current_user:
+        raise HTTPException(
+            status_code=401,
+            detail="User not authenticated"
+        )
+    
+    # Verify the current password
+    if not verify_password(current_password, current_user.hashed_password):
+        raise HTTPException(
+            status_code=400,
+            detail="Current password is incorrect"
+        )
+    
+    # Hash the new password and update the user record
+    current_user.hashed_password = get_password_hash(new_password)
+    db.commit()
+    
+    return {"message": "Password updated successfully"}
+
+@app.post("/api/users/forgot-password")
+async def forgot_password(
+    email: str = Form(...),
+    new_password: str = Form(...),
+    reset_token: str = Form(...),
+    db: Session = Depends(get_db)
+):
+    """
+    Endpoint to reset a user's password using a reset token.
+    """
+    # Find the user by email
+    user = db.query(User).filter(User.email == email).first()
+    if not user:
+        raise HTTPException(
+            status_code=404,
+            detail="User with this email does not exist"
+        )
+    
+    # Verify the reset token (this assumes you have a token verification mechanism)
+    try:
+        payload = jwt.decode(reset_token, SECRET_KEY, algorithms=[ALGORITHM])
+        if payload.get("sub") != user.email:
+            raise HTTPException(
+                status_code=400,
+                detail="Invalid reset token"
+            )
+    except JWTError:
+        raise HTTPException(
+            status_code=400,
+            detail="Invalid or expired reset token"
+        )
+    
+    # Hash the new password and update the user record
+    user.hashed_password = get_password_hash(new_password)
+    db.commit()
+    
+    return {"message": "Password reset successfully"}
+
+@app.post("/api/users/request-password-reset")
+async def request_password_reset(
+    email: str = Form(...),
+    db: Session = Depends(get_db)
+):
+    """
+    Endpoint to request a password reset token.
+    """
+    user = db.query(User).filter(User.email == email).first()
+    if not user:
+        raise HTTPException(
+            status_code=404,
+            detail="User with this email does not exist"
+        )
+    
+    # Generate a reset token
+    reset_token = create_access_token(data={"sub": user.email})
+    
+    # Send the token via email (implement your email-sending logic here)
+    # Example: send_email(user.email, "Password Reset", f"Your reset token: {reset_token}")
+    
+    return {"message": f"Password reset token generated: {reset_token}"}
+
+@app.middleware("http")
+async def authenticate_user_middleware(request: Request, call_next):
+    # Skip authentication for login and static routes
+    if request.url.path in ["/login", "/token"] or request.url.path.startswith("/static"):
+        return await call_next(request)
+
+    # Get token from header or cookie
+    token = None
+    auth_header = request.headers.get('Authorization')
+    if auth_header and auth_header.startswith('Bearer '):
+        token = auth_header.split(' ')[1]
+    else:
+        auth_cookie = request.cookies.get('access_token')
+        if auth_cookie and auth_cookie.startswith('Bearer '):
+            token = auth_cookie.split(' ')[1]
+
+    if not token:
+        if request.url.path.startswith("/admin"):
+            return RedirectResponse(url="/login", status_code=303)
+        return await call_next(request)
+
+    try:
+        # Verify token and get user
+        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+        username = payload.get("sub")
+        if username:
+            db = SessionLocal()
+            try:
+                user = db.query(User).filter(User.username == username).first()
+                if user and user.is_active:
+                    # Attach user to request state
+                    request.state.user = user
+                    response = await call_next(request)
+                    
+                    # Refresh token in cookie
+                    response.set_cookie(
+                        key="access_token",
+                        value=f"Bearer {token}",
+                        httponly=True,
+                        secure=True,
+                        samesite="lax",
+                        max_age=1800  # 30 minutes
+                    )
+                    return response
+            finally:
+                db.close()
+
+    except JWTError:
+        pass
+
+    if request.url.path.startswith("/admin"):
+        return RedirectResponse(url="/login", status_code=303)
+    return await call_next(request)
+
+# @app.on_event("startup")
+# async def alter_table():
+#     engine = create_engine(DATABASE_URL)
+#     with engine.connect() as connection:
+#         try:
+#             connection.execute(text("""
+#                 ALTER TABLE text_entries 
+#                 ADD COLUMN IF NOT EXISTS is_human_translation BOOLEAN DEFAULT FALSE
+#             """))
+#             connection.commit()
+#         except Exception as e:
+#             print(f"Migration error: {str(e)}")
+
 if __name__ == '__main__':
     uvicorn.run('main:app', host='0.0.0.0', port=8000)
-

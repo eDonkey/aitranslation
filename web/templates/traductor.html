@@ -1,255 +1,345 @@
-{% extends "base.html" %}
-
-{% block title %}Translator{% endblock %}
-
-{% block content %}
-<div class="row">
-    <div class="col-md-12">
-        <h1>Translation Service</h1>
-        
-        <div class="card mb-4">
-            <div class="card-body">
-                <h5 class="card-title">Your API Key</h5>
-                <div class="input-group mb-3">
-                    <input type="text" class="form-control" id="apiKey" placeholder="Enter your API key">
-                    <button class="btn btn-primary" onclick="saveApiKey()">Save</button>
-                </div>
-            </div>
-        </div>
-
-        <!-- Translation Type Selection -->
-        <div class="card mb-4">
-            <div class="card-body">
-                <h5 class="card-title">Translation Type</h5>
-                <div class="btn-group w-100" role="group">
-                    <button type="button" class="btn btn-outline-primary active" onclick="switchMode('ai')">AI Translation</button>
-                    <button type="button" class="btn btn-outline-primary" onclick="switchMode('human')">Human Translation</button>
-                </div>
-            </div>
-        </div>
-
-        <!-- AI Translation Form -->
-        <div id="aiTranslationForm" class="card">
-            <div class="card-body">
-                <h5 class="card-title">AI Translation</h5>
-                <form id="translationForm">
-                    <div class="mb-3">
-                        <label for="aiText" class="form-label">Text to translate:</label>
-                        <textarea class="form-control" id="aiText" rows="4" required></textarea>
-                    </div>
-
-                    <div class="mb-3">
-                        <label for="aiLanguage" class="form-label">Original Language:</label>
-                        <select class="form-select" id="aiLanguage" required>
-                            <option value="english">English</option>
-                            <option value="spanish">Spanish</option>
-                            <option value="portuguese">Portuguese</option>
-                            <option value="french">French</option>
-                            <option value="deutch">Deutch</option>
-                            <option value="italian">Italian</option>
-                        </select>
-                    </div>
-
-                    <button type="submit" class="btn btn-primary">Translate with AI</button>
-                </form>
-            </div>
-        </div>
-
-        <!-- Human Translation Form -->
-        <div id="humanTranslationForm" class="card" style="display: none;">
-            <div class="card-body">
-                <h5 class="card-title">Submit Text for Human Translation</h5>
-                <form id="humanForm">
-                    <div class="mb-3">
-                        <label for="humanText" class="form-label">Text to translate:</label>
-                        <textarea class="form-control" id="humanText" rows="4" required></textarea>
-                    </div>
-
-                    <div class="mb-3">
-                        <label for="humanLanguage" class="form-label">Original Language:</label>
-                        <select class="form-select" id="humanLanguage" required>
-                            <option value="english">English</option>
-                            <option value="spanish">Spanish</option>
-                            <option value="portuguese">Portuguese</option>
-                            <option value="french">French</option>
-                            <option value="deutch">Deutch</option>
-                            <option value="italian">Italian</option>
-                        </select>
-                    </div>
-
-                    <button type="submit" class="btn btn-primary">Submit for Human Translation</button>
-                </form>
-            </div>
-        </div>
-
-        <div id="results" class="card mt-4" style="display: none;">
-            <div class="card-body">
-                <h5 class="card-title">Results</h5>
-                <div id="translationsContainer"></div>
-            </div>
-        </div>
-    </div>
-</div>
-{% endblock %}
-
-{% block scripts %}
-<script>
-document.addEventListener('DOMContentLoaded', function() {
-    const savedApiKey = localStorage.getItem('clientApiKey');
-    if (savedApiKey) {
-        document.getElementById('apiKey').value = savedApiKey;
-    }
-
-    document.getElementById('translationForm').addEventListener('submit', async function(e) {
-        e.preventDefault();
-        await translate();
-    });
-
-    document.getElementById('humanForm').addEventListener('submit', async function(e) {
-        e.preventDefault();
-        await submitHumanTranslation();
-    });
-});
-
-function saveApiKey() {
-    const apiKey = document.getElementById('apiKey').value;
-    localStorage.setItem('clientApiKey', apiKey);
-}
-
-function switchMode(mode) {
-    const aiForm = document.getElementById('aiTranslationForm');
-    const humanForm = document.getElementById('humanTranslationForm');
-    const results = document.getElementById('results');
-    const buttons = document.querySelectorAll('.btn-group .btn');
-
-    buttons.forEach(btn => btn.classList.remove('active'));
-    event.target.classList.add('active');
-
-    if (mode === 'ai') {
-        aiForm.style.display = 'block';
-        humanForm.style.display = 'none';
-    } else {
-        aiForm.style.display = 'none';
-        humanForm.style.display = 'block';
-    }
-    results.style.display = 'none';
-}
-
-async function translate() {
-    const apiKey = localStorage.getItem('clientApiKey');
-    if (!apiKey) {
-        alert('Please enter and save your API key first');
-        return;
-    }
-
-    const text = document.getElementById('aiText').value;
-    const language = document.getElementById('aiLanguage').value;
-    const resultsDiv = document.getElementById('results');
-    const translationsContainer = document.getElementById('translationsContainer');
-
-    try {
-        const formData = new FormData();
-        formData.append('text', text);
-        formData.append('language', language);
-
-        const response = await fetch('/translate-text/', {
-            method: 'POST',
-            headers: {
-                'X-API-Key': apiKey
-            },
-            body: formData
-        });
-
-        if (!response.ok) {
-            throw new Error(`HTTP error! status: ${response.status}`);
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Enterprise Translation Solutions</title>
+    <script src="https://code.jquery.com/jquery-3.6.0.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/sweetalert2@11"></script>
+    <style>
+        :root {
+            --primary: #2c3e50;
+            --secondary: #34495e;
+            --accent: #3498db;
+            --light: #ecf0f1;
+            --success: #27ae60;
+            --text: #2c3e50;
         }
 
-        const data = await response.json();
-        
-        translationsContainer.innerHTML = `
-            <div class="alert alert-success">
-                Translation completed successfully!
-            </div>
-            <div class="card mb-3">
-                <div class="card-body">
-                    <h6 class="card-subtitle mb-2 text-muted">Original (${data.original_language})</h6>
-                    <p class="card-text">${data.original_text}</p>
-                </div>
-            </div>
-        `;
-
-        Object.entries(data.translations).forEach(([lang, translation]) => {
-            translationsContainer.innerHTML += `
-                <div class="card mb-3">
-                    <div class="card-body">
-                        <h6 class="card-subtitle mb-2 text-muted">${lang.charAt(0).toUpperCase() + lang.slice(1)}</h6>
-                        <p class="card-text">${translation}</p>
-                    </div>
-                </div>
-            `;
-        });
-
-        resultsDiv.style.display = 'block';
-    } catch (error) {
-        translationsContainer.innerHTML = `
-            <div class="alert alert-danger">
-                Error: ${error.message}
-            </div>
-        `;
-        resultsDiv.style.display = 'block';
-    }
-}
-
-async function submitHumanTranslation() {
-    const apiKey = localStorage.getItem('clientApiKey');
-    if (!apiKey) {
-        alert('Please enter and save your API key first');
-        return;
-    }
-
-    const text = document.getElementById('humanText').value;
-    const language = document.getElementById('humanLanguage').value;
-    const resultsDiv = document.getElementById('results');
-    const translationsContainer = document.getElementById('translationsContainer');
-
-    try {
-        const response = await fetch('/save-text/', {
-            method: 'POST',
-            headers: {
-                'X-API-Key': apiKey,
-                'Content-Type': 'application/json'
-            },
-            body: JSON.stringify({
-                text: text,
-                language: language
-            })
-        });
-
-        if (!response.ok) {
-            throw new Error(`HTTP error! status: ${response.status}`);
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
         }
 
-        const data = await response.json();
-        
-        translationsContainer.innerHTML = `
-            <div class="alert alert-success">
-                <h4 class="alert-heading">Success!</h4>
-                <p>Your text has been submitted for human translation.</p>
-                <hr>
-                <p class="mb-0">Reference ID: ${data.id}</p>
-            </div>
-        `;
+        body {
+            font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+            line-height: 1.6;
+            color: var(--text);
+        }
 
-        resultsDiv.style.display = 'block';
-        document.getElementById('humanForm').reset();
-    } catch (error) {
-        translationsContainer.innerHTML = `
-            <div class="alert alert-danger">
-                Error: ${error.message}
+        .hero {
+            background: linear-gradient(135deg, var(--primary), var(--secondary));
+            color: white;
+            padding: 6rem 2rem;
+            text-align: center;
+        }
+
+        .hero h1 {
+            font-size: 3rem;
+            margin-bottom: 1rem;
+        }
+
+        .hero p {
+            font-size: 1.2rem;
+            max-width: 800px;
+            margin: 0 auto;
+        }
+
+        .features {
+            padding: 4rem 2rem;
+            background: var(--light);
+        }
+
+        .features-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+            gap: 2rem;
+            max-width: 1200px;
+            margin: 0 auto;
+        }
+
+        .feature-card {
+            background: white;
+            padding: 2rem;
+            border-radius: 8px;
+            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+        }
+
+        .services {
+            padding: 4rem 2rem;
+        }
+
+        .service-comparison {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+            gap: 2rem;
+            max-width: 1200px;
+            margin: 2rem auto;
+        }
+
+        .service-card {
+            border: 1px solid #ddd;
+            border-radius: 8px;
+            padding: 2rem;
+            text-align: center;
+        }
+
+        .service-card.highlighted {
+            border-color: var(--accent);
+            box-shadow: 0 4px 12px rgba(52, 152, 219, 0.2);
+        }
+
+        .cta-button {
+            display: inline-block;
+            padding: 1rem 2rem;
+            background: var(--accent);
+            color: white;
+            text-decoration: none;
+            border-radius: 4px;
+            margin-top: 1rem;
+            transition: background 0.3s ease;
+        }
+
+        .cta-button:hover {
+            background: #2980b9;
+        }
+
+        .section-title {
+            text-align: center;
+            margin-bottom: 3rem;
+        }
+
+        .languages {
+            display: flex;
+            justify-content: center;
+            gap: 1rem;
+            flex-wrap: wrap;
+            margin: 2rem 0;
+        }
+
+        .language-tag {
+            background: var(--primary);
+            color: white;
+            padding: 0.5rem 1rem;
+            border-radius: 20px;
+            font-size: 0.9rem;
+        }
+
+        footer {
+            background: var(--primary);
+            color: white;
+            text-align: center;
+            padding: 2rem;
+            margin-top: 4rem;
+        }
+
+        .trial-section {
+            padding: 4rem 2rem;
+            background: var(--light);
+            margin: 2rem 0;
+        }
+
+        .trial-card {
+            background: white;
+            padding: 2rem;
+            border-radius: 8px;
+            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+            max-width: 800px;
+            margin: 0 auto;
+        }
+
+        .form-group {
+            margin-bottom: 1rem;
+        }
+
+        .form-group label {
+            display: block;
+            margin-bottom: 0.5rem;
+            color: var(--text);
+        }
+
+        .form-control {
+            width: 100%;
+            padding: 0.75rem;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            font-size: 1rem;
+        }
+
+        .translations-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+            gap: 1rem;
+        }
+
+        .translation-item {
+            background: var(--light);
+            padding: 1rem;
+            border-radius: 0.35rem;
+        }
+
+        .badge {
+            background: var(--accent);
+            color: white;
+            padding: 0.25rem 0.5rem;
+            border-radius: 20px;
+            font-size: 0.8rem;
+        }
+    </style>
+</head>
+<body>
+    <section class="hero">
+        <h1>Enterprise Translation Solutions</h1>
+        <p>Professional translation services powered by AI and human expertise for businesses that demand excellence</p>
+    </section>
+
+    <section class="trial-section">
+        <h2 class="section-title">Try Our AI Translation for Free!</h2>
+        <div class="trial-card">
+            <form id="trialTranslationForm">
+                <div class="form-group">
+                    <label for="trialSourceText">Text to Translate</label>
+                    <textarea class="form-control" id="trialSourceText" rows="4" required></textarea>
+                </div>
+                <div class="form-group">
+                    <label for="trialSourceLanguage">Source Language</label>
+                    <select class="form-control" id="trialSourceLanguage" required>
+                        <option value="english">English</option>
+                        <option value="spanish">Spanish</option>
+                        <option value="portuguese">Portuguese</option>
+                        <option value="french">French</option>
+                        <option value="deutch">German</option>
+                        <option value="italian">Italian</option>
+                    </select>
+                </div>
+                <button type="submit" class="cta-button">Try Free Translation</button>
+            </form>
+        </div>
+    </section>
+
+    <section class="features">
+        <h2 class="section-title">Why Choose Our Platform?</h2>
+        <div class="features-grid">
+            <div class="feature-card">
+                <h3>Multi-Language Support</h3>
+                <p>Support for 6 major languages with more coming soon:</p>
+                <div class="languages">
+                    <span class="language-tag">English</span>
+                    <span class="language-tag">Spanish</span>
+                    <span class="language-tag">Portuguese</span>
+                    <span class="language-tag">French</span>
+                    <span class="language-tag">German</span>
+                    <span class="language-tag">Italian</span>
+                </div>
             </div>
-        `;
-        resultsDiv.style.display = 'block';
-    }
-}
-</script>
-{% endblock %}
+            <div class="feature-card">
+                <h3>API Integration</h3>
+                <p>Seamlessly integrate our translation services into your workflow with our robust API</p>
+            </div>
+            <div class="feature-card">
+                <h3>Enterprise Security</h3>
+                <p>Secure API key management and access control for your sensitive content</p>
+            </div>
+        </div>
+    </section>
+
+    <section class="services">
+        <h2 class="section-title">Our Services</h2>
+        <div class="service-comparison">
+            <div class="service-card">
+                <h3>AI-Powered Translation</h3>
+                <p>Instant translations powered by advanced AI technology</p>
+                <ul style="list-style: none; margin: 1rem 0;">
+                    <li>✓ Instant delivery</li>
+                    <li>✓ Cost-effective</li>
+                    <li>✓ 24/7 availability</li>
+                    <li>✓ Ideal for high-volume content</li>
+                </ul>
+                <a href="/client" class="cta-button">Get Started</a>
+            </div>
+            <div class="service-card highlighted">
+                <h3>Human Translation</h3>
+                <p>Expert translators for your most important content</p>
+                <ul style="list-style: none; margin: 1rem 0;">
+                    <li>✓ Superior accuracy</li>
+                    <li>✓ Cultural adaptation</li>
+                    <li>✓ Context-aware translations</li>
+                    <li>✓ Perfect for legal & marketing content</li>
+                </ul>
+                <a href="/client" class="cta-button">Contact Sales</a>
+            </div>
+        </div>
+    </section>
+
+    <footer>
+        <p>© 2024 Enterprise Translation Solutions. All rights reserved.</p>
+    </footer>
+
+    <script>
+    $(document).ready(function() {
+        $('#trialTranslationForm').on('submit', function(e) {
+            e.preventDefault();
+            
+            const formData = new FormData();
+            formData.append('text', $('#trialSourceText').val());
+            formData.append('language', $('#trialSourceLanguage').val());
+            
+            $.ajax({
+                url: '/translate-text/',
+                method: 'POST',
+                data: formData,
+                processData: false,
+                contentType: false,
+                headers: {
+                    'X-API-Key': 'trial-key'
+                },
+                success: function(response) {
+                    let translationsHtml = '<div class="translations-grid">';
+                    
+                    // Add original text
+                    translationsHtml += `
+                        <div class="translation-item">
+                            <h6 class="font-weight-bold">Original (${$('#trialSourceLanguage').val()})</h6>
+                            <p>${$('#trialSourceText').val()}</p>
+                        </div>
+                    `;
+                    
+                    // Add translations
+                    Object.entries(response.translations).forEach(([lang, text]) => {
+                        if (lang !== $('#trialSourceLanguage').val()) {
+                            translationsHtml += `
+                                <div class="translation-item">
+                                    <h6 class="font-weight-bold">${lang.charAt(0).toUpperCase() + lang.slice(1)}</h6>
+                                    <p>${text}</p>
+                                </div>
+                            `;
+                        }
+                    });
+                    
+                    translationsHtml += '</div>';
+                    
+                    Swal.fire({
+                        title: 'Translation Complete!',
+                        html: translationsHtml,
+                        icon: 'success',
+                        width: '800px'
+                    });
+                    
+                    // Clear the form
+                    $('#trialSourceText').val('');
+                    $('#trialSourceLanguage').val('english');
+                },
+                error: function(xhr) {
+                    Swal.fire({
+                        title: 'Error!',
+                        text: xhr.responseJSON?.detail || 'Error with trial translation',
+                        icon: 'error'
+                    });
+                }
+            });
+        });
+    });
+    </script>
+</body>
+</html>

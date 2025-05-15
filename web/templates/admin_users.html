@@ -1,0 +1,169 @@
+{% extends "base.html" %}
+
+{% block title %}Manage Users{% endblock %}
+
+{% block content %}
+<body class="admin-users">
+    <h1>Manage Users</h1>
+
+    <!-- Search Form -->
+    <form method="GET" action="/admin/users" class="search-form">
+        <input type="text" name="search" placeholder="Search by username or email" value="{{ search_query or '' }}">
+        <button type="submit">Search</button>
+    </form>
+
+    <!-- Accordion for Create User Form -->
+    <div class="accordion">
+        <button class="accordion-toggle" onclick="toggleAccordion()">➤ Create New User</button>
+        <div class="accordion-content" id="create-user-form">
+            <!-- Success/Error Messages -->
+            <div id="message" style="display: none; margin-bottom: 1rem;"></div>
+
+            <form id="create-user-form-element" class="create-user-form">
+                <label for="username">Username:</label>
+                <input type="text" id="username" name="username" required>
+
+                <label for="email">Email:</label>
+                <input type="email" id="email" name="email" required>
+
+                <label for="password">Password:</label>
+                <input type="password" id="password" name="password" required>
+
+                <label for="is_admin">Is Admin:</label>
+                <input type="checkbox" id="is_admin" name="is_admin">
+
+                <label for="model_permission">Model Permission:</label>
+                <select id="model_permission" name="model_permission">
+                    <option value="ai_only">AI Only</option>
+                    <option value="human_only">Human Only</option>
+                    <option value="both">Both</option>
+                    <option value="none">None</option>
+                </select>
+
+                <button type="submit">Create User</button>
+            </form>
+        </div>
+    </div>
+
+    <!-- List of Users -->
+    <h3>Existing Users</h3>
+    <table id="user-list">
+        <thead>
+            <tr>
+                <th>ID</th>
+                <th>Username</th>
+                <th>Email</th>
+                <th>Is Admin</th>
+                <th>Is Active</th>
+                <th>Model Permission</th>
+                <th>Actions</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for user in users %}
+            <tr>
+                <td>{{ user.id }}</td>
+                <td>{{ user.username }}</td>
+                <td>{{ user.email }}</td>
+                <td>{{ "Yes" if user.is_admin else "No" }}</td>
+                <td>{{ "Yes" if user.is_active else "No" }}</td>
+                <td>{{ user.model_permission }}</td>
+                <td>
+                    <form method="POST" action="/api/admin/users/{{ user.id }}" style="display:inline;">
+                        <input type="hidden" name="_method" value="DELETE">
+                        <button type="submit">Block</button>
+                    </form>
+                </td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+
+    <!-- Pagination Controls -->
+    <div class="pagination">
+        {% if current_page > 1 %}
+        <a href="?page={{ current_page - 1 }}{% if search_query %}&search={{ search_query }}{% endif %}">Previous</a>
+        {% endif %}
+        <span>Page {{ current_page }}</span>
+        {% if total_users > current_page * 25 %}
+        <a href="?page={{ current_page + 1 }}{% if search_query %}&search={{ search_query }}{% endif %}">Next</a>
+        {% endif %}
+    </div>
+</body>
+
+<script>
+    // Toggle accordion for the create user form
+    function toggleAccordion() {
+        const form = document.getElementById('create-user-form');
+        const toggleButton = document.querySelector('.accordion-toggle');
+        if (form.style.display === 'block') {
+            form.style.display = 'none';
+            toggleButton.textContent = '➤ Create New User';
+        } else {
+            form.style.display = 'block';
+            toggleButton.textContent = '▼ Create New User';
+        }
+    }
+
+    // Handle form submission for creating a user
+    document.getElementById('create-user-form-element').addEventListener('submit', async function (event) {
+        event.preventDefault(); // Prevent default form submission
+
+        const form = event.target;
+        const formData = new FormData(form);
+
+        // Send the form data to the server
+        try {
+            const response = await fetch('/api/admin/users', {
+                method: 'POST',
+                body: formData,
+            });
+
+            const result = await response.json();
+
+            const messageDiv = document.getElementById('message');
+            if (response.ok) {
+                // Success: Show success message, clear form, and refresh user list
+                messageDiv.style.display = 'block';
+                messageDiv.style.color = 'green';
+                messageDiv.textContent = result.message;
+
+                form.reset(); // Clear the form
+                refreshUserList(); // Refresh the user list
+            } else {
+                // Error: Show error message
+                messageDiv.style.display = 'block';
+                messageDiv.style.color = 'red';
+                messageDiv.textContent = result.detail || 'An error occurred while creating the user.';
+            }
+        } catch (error) {
+            console.error('Error:', error);
+        }
+    });
+
+    // Function to refresh the user list
+    async function refreshUserList() {
+        try {
+            const response = await fetch('/admin/users?page=1', {
+                method: 'GET',
+                headers: {
+                    'X-Requested-With': 'XMLHttpRequest',
+                },
+            });
+
+            if (response.ok) {
+                const html = await response.text();
+                const parser = new DOMParser();
+                const doc = parser.parseFromString(html, 'text/html');
+                const newTableBody = doc.querySelector('#user-list tbody');
+
+                // Replace the current table body with the new one
+                const currentTableBody = document.querySelector('#user-list tbody');
+                currentTableBody.innerHTML = newTableBody.innerHTML;
+            }
+        } catch (error) {
+            console.error('Error refreshing user list:', error);
+        }
+    }
+</script>
+{% endblock %}

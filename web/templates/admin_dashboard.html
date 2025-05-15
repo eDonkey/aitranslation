@@ -1,0 +1,34 @@
+{% extends "base.html" %}
+
+{% block title %}Admin Dashboard{% endblock %}
+
+{% block content %}
+<div class="admin-dashboard">
+    <h1>Admin Dashboard</h1>
+
+    <div class="card-container">
+        <div class="card">
+            <h3>Manual Translations</h3>
+            <p>Last 24 Hours: {{ stats.manual_translations.last_24_hours }}</p>
+            <p>Last 7 Days: {{ stats.manual_translations.last_7_days }}</p>
+            <p>Last 30 Days: {{ stats.manual_translations.last_30_days }}</p>
+        </div>
+
+        <div class="card">
+            <h3>AI Translations</h3>
+            <p>Last 24 Hours: {{ stats.ai_translations.last_24_hours }}</p>
+            <p>Last 7 Days: {{ stats.ai_translations.last_7_days }}</p>
+            <p>Last 30 Days: {{ stats.ai_translations.last_30_days }}</p>
+        </div>
+
+        <div class="card">
+            <h3>Top 10 API Keys</h3>
+            <ul>
+                {% for api_key in stats.top_10_api_keys %}
+                <li>{{ api_key[0] }} - {{ api_key[1] }} uses</li>
+                {% endfor %}
+            </ul>
+        </div>
+    </div>
+</div>
+{% endblock %}

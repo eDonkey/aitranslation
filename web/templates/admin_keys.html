@@ -1,140 +1,109 @@
 {% extends "base.html" %}
 
-{% block title %}API Key Management{% endblock %}
+{% block title %}API Management{% endblock %}
 
 {% block content %}
-<div class="row">
-    <div class="col-md-12">
-        <h1>API Key Management</h1>
-        
-        <div class="card mb-4">
-            <div class="card-body">
-                <h5 class="card-title">Create New API Key</h5>
-                <form id="createKeyForm" class="row g-3">
-                    <div class="col-md-8">
-                        <input type="text" class="form-control" id="keyName" placeholder="Key Name" required>
-                    </div>
-                    <div class="col-md-4">
-                        <button type="submit" class="btn btn-primary">Create Key</button>
-                    </div>
-                </form>
-            </div>
-        </div>
+<body class="admin-keys">
+    <h1>API Management</h1>
 
-        <div class="card">
-            <div class="card-body">
-                <h5 class="card-title">Existing API Keys</h5>
-                <div id="keysList">Loading...</div>
-            </div>
-        </div>
-    </div>
-</div>
-{% endblock %}
+    <table id="api-keys-table">
+        <thead>
+            <tr>
+                <th>ID</th>
+                <th>API Key</th>
+                <th>Name</th>
+                <th>Status</th>
+                <th>Actions</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for key in api_keys %}
+            <tr>
+                <td>{{ key.id }}</td>
+                <td>{{ key.key }}</td>
+                <td>{{ key.name }}</td>
+                <td>{{ "Active" if key.is_active else "Blocked" }}</td>
+                <td>
+                    <button onclick="toggleApiKeyStatus('{{ key.id }}')">
+                        {{ "Block" if key.is_active else "Unblock" }}
+                    </button>
+                    <button class="info-button" data-key-id="{{ key.id }}">+ INFO</button>
+                    <div class="tooltip-content" id="tooltip-{{ key.id }}" style="display: none;">
+                        Loading stats...
+                    </div>
+                </td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+</body>
 
-{% block scripts %}
 <script>
-document.addEventListener('DOMContentLoaded', async function() {
-    const adminKey = localStorage.getItem('adminKey');
-    if (!adminKey) {
-        const key = prompt('Please enter admin key:');
-        if (key) {
-            localStorage.setItem('adminKey', key);
-        }
-    }
+    let activeTooltip = null; // Track the currently active tooltip
 
-    async function loadKeys() {
-        try {
-            const response = await fetch('/admin/api-keys/', {
-                headers: {
-                    'X-Admin-Key': localStorage.getItem('adminKey')
+    document.querySelectorAll('.info-button').forEach(button => {
+        button.addEventListener('click', async function () {
+            const keyId = this.getAttribute('data-key-id');
+            const tooltipContent = document.getElementById(`tooltip-${keyId}`);
+
+            // Close the currently active tooltip if it's not the same as the clicked one
+            if (activeTooltip && activeTooltip !== tooltipContent) {
+                activeTooltip.style.display = "none";
+                activeTooltip = null;
+            }
+
+            // Toggle the visibility of the clicked tooltip
+            if (tooltipContent.style.display === "block") {
+                tooltipContent.style.display = "none";
+                activeTooltip = null;
+                return;
+            }
+
+            // Fetch stats if not already loaded
+            if (tooltipContent.textContent.trim() === "Loading stats...") {
+                try {
+                    const response = await fetch(`/api/admin/api-keys/${keyId}/stats`);
+                    if (!response.ok) {
+                        throw new Error("Failed to fetch stats");
+                    }
+                    const stats = await response.json();
+                    tooltipContent.textContent = `
+                        Name: ${stats.name}
+                        Usage Count: ${stats.usage_count}
+                        Last Used: ${stats.last_used || "Never"}
+                    `;
+                } catch (error) {
+                    console.error("Error fetching stats:", error);
+                    tooltipContent.textContent = "Error loading stats.";
                 }
-            });
-            const keys = await response.json();
-            
-            document.getElementById('keysList').innerHTML = `
-                <table class="table">
-                    <thead>
-                        <tr>
-                            <th>Name</th>
-                            <th>Key</th>
-                            <th>Created</th>
-                            <th>Last Used</th>
-                            <th>Status</th>
-                            <th>Actions</th>
-                        </tr>
-                    </thead>
-                    <tbody>
-                        ${keys.map(key => `
-                            <tr>
-                                <td>${key.name}</td>
-                                <td><code>${key.key}</code></td>
-                                <td>${new Date(key.created_at).toLocaleString()}</td>
-                                <td>${key.last_used ? new Date(key.last_used).toLocaleString() : 'Never'}</td>
-                                <td>
-                                    <span class="badge bg-${key.is_active ? 'success' : 'danger'}">
-                                        ${key.is_active ? 'Active' : 'Inactive'}
-                                    </span>
-                                </td>
-                                <td>
-                                    <button class="btn btn-sm btn-danger" onclick="deleteKey(${key.id})">
-                                        Delete
-                                    </button>
-                                </td>
-                            </tr>
-                        `).join('')}
-                    </tbody>
-                </table>
-            `;
-        } catch (error) {
-            document.getElementById('keysList').innerHTML = `
-                <div class="alert alert-danger">
-                    Error loading keys: ${error.message}
-                </div>
-            `;
-        }
-    }
+            }
 
-    document.getElementById('createKeyForm').addEventListener('submit', async function(e) {
-        e.preventDefault();
-        try {
-            const response = await fetch('/admin/api-keys/', {
-                method: 'POST',
-                headers: {
-                    'X-Admin-Key': localStorage.getItem('adminKey'),
-                    'Content-Type': 'application/x-www-form-urlencoded',
-                },
-                body: `name=${encodeURIComponent(document.getElementById('keyName').value)}`
-            });
-            
-            if (!response.ok) throw new Error('Failed to create key');
-            
-            document.getElementById('keyName').value = '';
-            loadKeys();
-        } catch (error) {
-            alert('Error creating key: ' + error.message);
+            // Show the tooltip and set it as the active one
+            tooltipContent.style.display = "block";
+            activeTooltip = tooltipContent;
+        });
+    });
+
+    // Close the tooltip when clicking outside
+    document.addEventListener('click', function (event) {
+        if (activeTooltip && !event.target.closest('.info-button') && !event.target.closest('.tooltip-content')) {
+            activeTooltip.style.display = "none";
+            activeTooltip = null;
         }
     });
 
-    window.deleteKey = async function(keyId) {
-        if (!confirm('Are you sure you want to delete this key?')) return;
-        
+    // Toggle API key status
+    async function toggleApiKeyStatus(keyId) {
         try {
-            const response = await fetch(`/admin/api-keys/${keyId}`, {
-                method: 'DELETE',
-                headers: {
-                    'X-Admin-Key': localStorage.getItem('adminKey')
-                }
+            const response = await fetch(`/api/admin/api-keys/${keyId}/toggle`, {
+                method: 'PUT',
             });
-            
-            if (!response.ok) throw new Error('Failed to delete key');
-            
-            loadKeys();
+            const result = await response.json();
+            alert(result.message);
+            location.reload(); // Reload the page to reflect changes
         } catch (error) {
-            alert('Error deleting key: ' + error.message);
+            alert("Error toggling API key status.");
         }
-    };
-
-    loadKeys();
-});
+    }
 </script>
 {% endblock %}
