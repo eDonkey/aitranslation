@@ -510,7 +510,7 @@ async def admin_dashboard(
                 TextEntry.created_at >= now - timedelta(days=30)
             ).count(),
         },
-        "last_30_text_entries": db.query(TextEntry.apikey_requested).filter(
+        "last_30_text_entries": db.query(TextEntry).filter(
             TextEntry.apikey_requested != None
         ).order_by(TextEntry.created_at.desc()).limit(30).all(),
     }
