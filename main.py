@@ -475,24 +475,47 @@ async def admin_dashboard(
     request: Request,
     db: Session = Depends(get_db)
 ):
-    # Example statistics (replace with actual queries)
+    from datetime import datetime, timedelta
+
+    # Current time
+    now = datetime.utcnow()
+
+    # Fetch statistics from the database
     stats = {
         "manual_translations": {
-            "last_24_hours": 10,
-            "last_7_days": 50,
-            "last_30_days": 200,
+            "last_24_hours": db.query(TextEntry).filter(
+                TextEntry.is_human_translation == True,
+                TextEntry.updated_at >= now - timedelta(hours=24)
+            ).count(),
+            "last_7_days": db.query(TextEntry).filter(
+                TextEntry.is_human_translation == True,
+                TextEntry.updated_at >= now - timedelta(days=7)
+            ).count(),
+            "last_30_days": db.query(TextEntry).filter(
+                TextEntry.is_human_translation == True,
+                TextEntry.updated_at >= now - timedelta(days=30)
+            ).count(),
         },
         "ai_translations": {
-            "last_24_hours": 20,
-            "last_7_days": 100,
-            "last_30_days": 400,
+            "last_24_hours": db.query(TextEntry).filter(
+                TextEntry.is_human_translation == False,
+                TextEntry.created_at >= now - timedelta(hours=24)
+            ).count(),
+            "last_7_days": db.query(TextEntry).filter(
+                TextEntry.is_human_translation == False,
+                TextEntry.created_at >= now - timedelta(days=7)
+            ).count(),
+            "last_30_days": db.query(TextEntry).filter(
+                TextEntry.is_human_translation == False,
+                TextEntry.created_at >= now - timedelta(days=30)
+            ).count(),
         },
-        "last_30_api_keys": [
-            {"name": "Key 1", "last_used": "2025-05-13 10:00:00"},
-            {"name": "Key 2", "last_used": "2025-05-13 11:00:00"},
-        ],
+        "last_30_api_keys": db.query(APIKey).filter(
+            APIKey.last_used != None
+        ).order_by(APIKey.last_used.desc()).limit(30).all(),
     }
 
+    # Render the template with real data
     return templates.TemplateResponse(
         "admin_dashboard.html",
         {
