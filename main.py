@@ -510,9 +510,9 @@ async def admin_dashboard(
                 TextEntry.created_at >= now - timedelta(days=30)
             ).count(),
         },
-        "last_30_api_keys": db.query(APIKey).filter(
-            APIKey.last_used != None
-        ).order_by(APIKey.last_used.desc()).limit(30).all(),
+        "last_30_text_entries": db.query(TextEntry).filter(
+            TextEntry.apikey_requested != None
+        ).order_by(TextEntry.created_at.desc()).limit(30).all(),
     }
 
     # Render the template with real data
