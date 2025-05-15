@@ -1,296 +1,108 @@
 {% extends "base.html" %}
 
+{% block title %}Manage Users{% endblock %}
+
 {% block content %}
-<div class="container-fluid">
-    <!-- Header -->
-    <div class="d-sm-flex align-items-center justify-content-between mb-4">
-        <h1 class="h3 mb-0 text-gray-800">User Administration</h1>
+<body class="admin-users">
+    <h1>Manage Users</h1>
+
+    <!-- Search Form -->
+    <form method="GET" action="/admin/users" class="search-form">
+        <input type="text" name="search" placeholder="Search by username or email" value="{{ search_query or '' }}">
+        <button type="submit">Search</button>
+    </form>
+
+    <!-- Accordion for Create User Form -->
+    <div class="accordion">
+        <button class="accordion-toggle" onclick="toggleAccordion()">➤ Create New User</button>
+        <div class="accordion-content" id="create-user-form">
+            <form method="POST" action="/api/admin/users" class="create-user-form">
+                <label for="username">Username:</label>
+                <input type="text" id="username" name="username" required>
+
+                <label for="email">Email:</label>
+                <input type="email" id="email" name="email" required>
+
+                <label for="password">Password:</label>
+                <input type="password" id="password" name="password" required>
+
+                <label for="is_admin">Is Admin:</label>
+                <input type="checkbox" id="is_admin" name="is_admin">
+
+                <label for="model_permission">Model Permission:</label>
+                <select id="model_permission" name="model_permission">
+                    <option value="ai_only">AI Only</option>
+                    <option value="human_only">Human Only</option>
+                    <option value="both">Both</option>
+                    <option value="none">None</option>
+                </select>
+
+                <button type="submit">Create User</button>
+            </form>
+        </div>
     </div>
 
-    <!-- Content Row -->
-    <div class="row">
-        <!-- User Creation Card -->
-        <div class="col-xl-12 col-md-12 mb-4">
-            <div class="card shadow h-100">
-                <div class="card-header py-3">
-                    <h6 class="m-0 font-weight-bold text-primary">Create New User</h6>
-                </div>
-                <div class="card-body">
-                    <form id="createUserForm">
-                        <div class="row">
-                            <div class="col-md-4">
-                                <div class="form-group">
-                                    <label for="username">Username</label>
-                                    <input type="text" class="form-control" id="username" required>
-                                </div>
-                            </div>
-                            <div class="col-md-4">
-                                <div class="form-group">
-                                    <label for="email">Email</label>
-                                    <input type="email" class="form-control" id="email" required>
-                                </div>
-                            </div>
-                            <div class="col-md-4">
-                                <div class="form-group">
-                                    <label for="password">Password</label>
-                                    <input type="password" class="form-control" id="password" required>
-                                </div>
-                            </div>
-                        </div>
-                        <div class="form-check mt-2">
-                            <input type="checkbox" class="form-check-input" id="isAdmin">
-                            <label class="form-check-label" for="isAdmin">Admin User</label>
-                        </div>
-                        <div class="form-group">
-                            <label for="modelPermission">Model Access Permission</label>
-                            <select class="form-control" id="modelPermission" required>
-                                <option value="none">No Access</option>
-                                <option value="ai_only">AI Model Only</option>
-                                <option value="human_only">Human Translation Only</option>
-                                <option value="both">Both Models</option>
-                            </select>
-                        </div>
-                        <button type="submit" class="btn btn-primary mt-3">Create User</button>
+    <!-- List of Users -->
+    <h3>Existing Users</h3>
+    <table>
+        <thead>
+            <tr>
+                <th>ID</th>
+                <th>Username</th>
+                <th>Email</th>
+                <th>Is Admin</th>
+                <th>Is Active</th>
+                <th>Model Permission</th>
+                <th>Actions</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for user in users %}
+            <tr>
+                <td>{{ user.id }}</td>
+                <td>{{ user.username }}</td>
+                <td>{{ user.email }}</td>
+                <td>{{ "Yes" if user.is_admin else "No" }}</td>
+                <td>{{ "Yes" if user.is_active else "No" }}</td>
+                <td>{{ user.model_permission }}</td>
+                <td>
+                    <form method="POST" action="/api/admin/users/{{ user.id }}" style="display:inline;">
+                        <input type="hidden" name="_method" value="PUT">
+                        <button type="submit">Update</button>
                     </form>
-                </div>
-            </div>
-        </div>
+                    <form method="POST" action="/api/admin/users/{{ user.id }}" style="display:inline;">
+                        <input type="hidden" name="_method" value="DELETE">
+                        <button type="submit">Block</button>
+                    </form>
+                </td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
 
-        <!-- Users List Card -->
-        <div class="col-xl-12 col-md-12 mb-4">
-            <div class="card shadow h-100">
-                <div class="card-header py-3">
-                    <h6 class="m-0 font-weight-bold text-primary">User Management</h6>
-                </div>
-                <div class="card-body">
-                    <div class="table-responsive">
-                        <table class="table table-bordered" id="usersTable" width="100%" cellspacing="0">
-                            <thead>
-                                <tr>
-                                    <th>Username</th>
-                                    <th>Email</th>
-                                    <th>Admin</th>
-                                    <th>Status</th>
-                                    <th>Model Permission</th>
-                                    <th>API Key</th>
-                                    <th>Actions</th>
-                                </tr>
-                            </thead>
-                            <tbody>
-                                {% for user in users %}
-                                <tr data-user-id="{{ user.id }}">
-                                    <td>{{ user.username }}</td>
-                                    <td>{{ user.email }}</td>
-                                    <td>
-                                        <div class="custom-control custom-switch">
-                                            <input type="checkbox" class="custom-control-input admin-toggle" 
-                                                   id="adminToggle{{ user.id }}"
-                                                   {% if user.is_admin %}checked{% endif %}
-                                                   {% if user.id == current_user.id %}disabled{% endif %}>
-                                            <label class="custom-control-label" for="adminToggle{{ user.id }}"></label>
-                                        </div>
-                                    </td>
-                                    <td>
-                                        <div class="custom-control custom-switch">
-                                            <input type="checkbox" class="custom-control-input active-toggle" 
-                                                   id="activeToggle{{ user.id }}"
-                                                   {% if user.is_active %}checked{% endif %}
-                                                   {% if user.id == current_user.id %}disabled{% endif %}>
-                                            <label class="custom-control-label" for="activeToggle{{ user.id }}"></label>
-                                        </div>
-                                    </td>
-                                    <td>{{ user.model_permission }}</td>
-                                    <td>
-                                        {% if user.api_key %}
-                                        <div class="api-key-wrapper">
-                                            <span class="api-key-masked">•••••••••••••</span>
-                                            <button class="btn btn-sm btn-info show-api-key">Show</button>
-                                            <span class="api-key-full d-none">{{ user.api_key }}</span>
-                                        </div>
-                                        {% else %}
-                                        No API Key
-                                        {% endif %}
-                                    </td>
-                                    <td>
-                                        {% if user.id != current_user.id %}
-                                        <button class="btn btn-danger btn-sm delete-user">
-                                            <i class="fas fa-trash"></i>
-                                        </button>
-                                        {% endif %}
-                                    </td>
-                                </tr>
-                                {% endfor %}
-                            </tbody>
-                        </table>
-                    </div>
-                </div>
-            </div>
-        </div>
+    <!-- Pagination Controls -->
+    <div class="pagination">
+        {% if current_page > 1 %}
+        <a href="?page={{ current_page - 1 }}{% if search_query %}&search={{ search_query }}{% endif %}">Previous</a>
+        {% endif %}
+        <span>Page {{ current_page }}</span>
+        {% if total_users > current_page * 25 %}
+        <a href="?page={{ current_page + 1 }}{% if search_query %}&search={{ search_query }}{% endif %}">Next</a>
+        {% endif %}
     </div>
-</div>
+</body>
 
-{% endblock %}
-
-{% block extra_js %}
 <script>
-document.addEventListener('DOMContentLoaded', function() {
-    // Initialize DataTable
-    $('#usersTable').DataTable();
-
-    // Create User
-    document.getElementById('createUserForm').addEventListener('submit', async function(e) {
-        e.preventDefault();
-        
-        const formData = new FormData();
-        formData.append('username', document.getElementById('username').value);
-        formData.append('email', document.getElementById('email').value);
-        formData.append('password', document.getElementById('password').value);
-        formData.append('is_admin', document.getElementById('isAdmin').checked);
-        formData.append('model_permission', document.getElementById('modelPermission').value);
-        
-        try {
-            const response = await fetch('/api/admin/users', {
-                method: 'POST',
-                body: formData
-            });
-            
-            if (response.ok) {
-                const data = await response.json();
-                let message = 'User created successfully';
-                if (data.api_key) {
-                    message += `\nAPI Key: ${data.api_key}\nPlease save this key as it won't be shown again.`;
-                }
-                Swal.fire({
-                    title: 'Success!',
-                    text: message,
-                    icon: 'success'
-                }).then(() => {
-                    location.reload();
-                });
-            } else {
-                const data = await response.json();
-                Swal.fire({
-                    title: 'Error!',
-                    text: data.detail || 'Error creating user',
-                    icon: 'error'
-                });
-            }
-        } catch (error) {
-            Swal.fire({
-                title: 'Error!',
-                text: 'Error creating user',
-                icon: 'error'
-            });
+    function toggleAccordion() {
+        const form = document.getElementById('create-user-form');
+        const toggleButton = document.querySelector('.accordion-toggle');
+        if (form.style.display === 'block') {
+            form.style.display = 'none';
+            toggleButton.textContent = '➤ Create New User';
+        } else {
+            form.style.display = 'block';
+            toggleButton.textContent = '▼ Create New User';
         }
-    });
-
-    // Update User Status
-    document.querySelectorAll('.admin-toggle, .active-toggle').forEach(toggle => {
-        toggle.addEventListener('change', async function() {
-            const tr = this.closest('tr');
-            const userId = tr.dataset.userId;
-            const isAdmin = tr.querySelector('.admin-toggle').checked;
-            const isActive = tr.querySelector('.active-toggle').checked;
-            
-            const formData = new FormData();
-            formData.append('is_admin', isAdmin);
-            formData.append('is_active', isActive);
-            
-            try {
-                const response = await fetch(`/api/admin/users/${userId}`, {
-                    method: 'PUT',
-                    body: formData
-                });
-                
-                if (!response.ok) {
-                    const data = await response.json();
-                    Swal.fire({
-                        title: 'Error!',
-                        text: data.detail || 'Error updating user',
-                        icon: 'error'
-                    }).then(() => {
-                        location.reload();
-                    });
-                }
-            } catch (error) {
-                Swal.fire({
-                    title: 'Error!',
-                    text: 'Error updating user',
-                    icon: 'error'
-                }).then(() => {
-                    location.reload();
-                });
-            }
-        });
-    });
-
-    // Delete User
-    document.querySelectorAll('.delete-user').forEach(button => {
-        button.addEventListener('click', async function() {
-            const result = await Swal.fire({
-                title: 'Are you sure?',
-                text: "You won't be able to revert this!",
-                icon: 'warning',
-                showCancelButton: true,
-                confirmButtonColor: '#d33',
-                cancelButtonColor: '#3085d6',
-                confirmButtonText: 'Yes, delete it!'
-            });
-
-            if (result.isConfirmed) {
-                const tr = this.closest('tr');
-                const userId = tr.dataset.userId;
-                
-                try {
-                    const response = await fetch(`/api/admin/users/${userId}`, {
-                        method: 'DELETE'
-                    });
-                    
-                    if (response.ok) {
-                        Swal.fire(
-                            'Deleted!',
-                            'User has been deleted.',
-                            'success'
-                        ).then(() => {
-                            tr.remove();
-                        });
-                    } else {
-                        const data = await response.json();
-                        Swal.fire(
-                            'Error!',
-                            data.detail || 'Error deleting user',
-                            'error'
-                        );
-                    }
-                } catch (error) {
-                    Swal.fire(
-                        'Error!',
-                        'Error deleting user',
-                        'error'
-                    );
-                }
-            }
-        });
-    });
-
-    // Add API key show/hide functionality
-    document.querySelectorAll('.show-api-key').forEach(button => {
-        button.addEventListener('click', function() {
-            const wrapper = this.closest('.api-key-wrapper');
-            const masked = wrapper.querySelector('.api-key-masked');
-            const full = wrapper.querySelector('.api-key-full');
-            
-            if (masked.classList.contains('d-none')) {
-                masked.classList.remove('d-none');
-                full.classList.add('d-none');
-                this.textContent = 'Show';
-            } else {
-                masked.classList.add('d-none');
-                full.classList.remove('d-none');
-                this.textContent = 'Hide';
-            }
-        });
-    });
-});
+    }
 </script>
-{% endblock %} 
+{% endblock %}

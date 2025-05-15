@@ -1,8 +1,8 @@
-from fastapi import FastAPI, Header, HTTPException, Depends, Request, Form, Path, status
+from fastapi import FastAPI, Header, HTTPException, Depends, Request, Form, Path, status, Query
 from fastapi.responses import HTMLResponse, FileResponse, RedirectResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
-from sqlalchemy import create_engine, Column, Integer, String, Text, TIMESTAMP, text, Boolean, DateTime
+from sqlalchemy import create_engine, Column, Integer, String, Text, TIMESTAMP, text, Boolean, DateTime, func
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker, Session
 from typing import Optional, List
@@ -510,9 +510,15 @@ async def admin_dashboard(
                 TextEntry.created_at >= now - timedelta(days=30)
             ).count(),
         },
-        "last_30_text_entries": db.query(TextEntry).filter(
-            TextEntry.apikey_requested != None
-        ).order_by(TextEntry.created_at.desc()).limit(30).all(),
+        "top_10_api_keys": db.query(
+            APIKey.name, 
+            func.count(TextEntry.id).label("usage_count")
+        )
+        .join(TextEntry, TextEntry.apikey_requested == APIKey.key)
+        .group_by(APIKey.name)
+        .order_by(func.count(TextEntry.id).desc())
+        .limit(10)
+        .all(),
     }
 
     # Render the template with real data
@@ -886,15 +892,30 @@ async def add_cors_headers(request: Request, call_next):
 async def admin_users_page(
     request: Request,
     current_user: User = Depends(get_current_active_admin),
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    page: int = Query(1, gt=0),  # Default to page 1
+    search: str = Query(None)   # Optional search query
 ):
-    users = db.query(User).all()
+    query = db.query(User)
+    
+    # Apply search filter if provided
+    if search:
+        query = query.filter(
+            (User.username.ilike(f"%{search}%")) | (User.email.ilike(f"%{search}%"))
+        )
+    
+    # Pagination
+    total_users = query.count()
+    users = query.offset((page - 1) * 25).limit(25).all()
+    
     return templates.TemplateResponse(
         "admin_users.html",
         {
             "request": request,
             "users": users,
-            "current_user": current_user
+            "total_users": total_users,
+            "current_page": page,
+            "search_query": search,
         }
     )
 

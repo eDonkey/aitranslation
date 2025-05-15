@@ -1,0 +1,297 @@
+/* General styles */
+body {
+    font-family: Arial, sans-serif;
+    margin: 0;
+    padding: 0;
+    background-color: #f8f9fa;
+}
+
+.card {
+    border-radius: 10px;
+}
+
+.navbar-brand {
+    font-weight: bold;
+}
+
+header {
+    background-color: #333;
+    color: white;
+    padding: 1rem;
+}
+
+header h1 {
+    margin: 0;
+}
+
+nav ul {
+    list-style: none;
+    padding: 0;
+}
+
+nav ul li {
+    display: inline;
+    margin-right: 1rem;
+}
+
+nav ul li a {
+    color: white;
+    text-decoration: none;
+}
+
+main {
+    padding: 2rem;
+}
+
+footer {
+    background-color: #333;
+    color: white;
+    text-align: center;
+    padding: 1rem;
+    position: relative; /* Change from fixed to relative */
+    bottom: 0;
+    width: 100%;
+}
+
+/* Styles specific to the admin dashboard */
+body.admin-dashboard {
+    background-color: #e9ecef;
+}
+
+body.admin-dashboard h1 {
+    color: #007bff;
+}
+
+/* Scoped styles for admin dashboard cards */
+body.admin-dashboard .card-container {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr); /* 3 cards per row */
+    gap: 1.5rem; /* Space between cards */
+    margin-top: 2rem;
+}
+
+body.admin-dashboard .card {
+    background-color: #ffffff;
+    border: 1px solid #ddd;
+    border-radius: 8px;
+    box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+    padding: 1.5rem;
+    transition: transform 0.2s ease, box-shadow 0.2s ease;
+}
+
+body.admin-dashboard .card:nth-child(1) {
+    background-color: #f8d7da; /* Light red */
+}
+
+body.admin-dashboard .card:nth-child(2) {
+    background-color: #d4edda; /* Light green */
+}
+
+body.admin-dashboard .card:nth-child(3) {
+    background-color: #d1ecf1; /* Light blue */
+}
+
+body.admin-dashboard .card:hover {
+    transform: translateY(-5px);
+    box-shadow: 0 6px 10px rgba(0, 0, 0, 0.15);
+}
+
+body.admin-dashboard .card h3 {
+    margin-top: 0;
+    color: #333;
+}
+
+body.admin-dashboard .card p {
+    margin: 0.5rem 0;
+    color: #555;
+}
+
+/* Styles specific to the admin users page */
+body.admin-users {
+    background-color: #ffffff;
+}
+
+body.admin-users h1 {
+    color: #28a745;
+}
+
+/* Styles for admin users table */
+body.admin-users table {
+    width: 100%;
+    border-collapse: collapse;
+    margin-top: 2rem;
+    background-color: #f8f9fa;
+    border: 1px solid #ddd;
+    border-radius: 8px;
+    overflow: hidden;
+    box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+}
+
+body.admin-users table th,
+body.admin-users table td {
+    padding: 1rem;
+    text-align: left;
+    border-bottom: 1px solid #ddd;
+}
+
+body.admin-users table th {
+    background-color: #007bff;
+    color: white;
+    font-weight: bold;
+}
+
+body.admin-users table tr:nth-child(even) {
+    background-color: #f2f2f2;
+}
+
+body.admin-users table tr:hover {
+    background-color: #e9ecef;
+}
+
+body.admin-users table td button {
+    background-color: #007bff;
+    color: white;
+    border: none;
+    border-radius: 4px;
+    padding: 0.5rem 1rem;
+    cursor: pointer;
+    transition: background-color 0.2s ease;
+}
+
+body.admin-users table td button:hover {
+    background-color: #0056b3;
+}
+
+/* Styles for create user form */
+body.admin-users form.create-user-form {
+    background-color: #ffffff;
+    border: 1px solid #ddd;
+    border-radius: 8px;
+    padding: 2rem;
+    margin-top: 2rem;
+    box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+}
+
+body.admin-users form.create-user-form label {
+    display: block;
+    margin-bottom: 0.5rem;
+    font-weight: bold;
+    color: #333;
+}
+
+body.admin-users form.create-user-form input,
+body.admin-users form.create-user-form select,
+body.admin-users form.create-user-form button {
+    width: 100%;
+    padding: 0.75rem;
+    margin-bottom: 1rem;
+    border: 1px solid #ddd;
+    border-radius: 4px;
+    font-size: 1rem;
+}
+
+body.admin-users form.create-user-form input:focus,
+body.admin-users form.create-user-form select:focus {
+    border-color: #007bff;
+    outline: none;
+    box-shadow: 0 0 4px rgba(0, 123, 255, 0.5);
+}
+
+body.admin-users form.create-user-form button {
+    background-color: #28a745;
+    color: white;
+    border: none;
+    cursor: pointer;
+    transition: background-color 0.2s ease;
+}
+
+body.admin-users form.create-user-form button:hover {
+    background-color: #218838;
+}
+
+/* Search form styles */
+body.admin-users .search-form {
+    margin-bottom: 1.5rem;
+    display: flex;
+    gap: 0.5rem;
+}
+
+body.admin-users .search-form input {
+    flex: 1;
+    padding: 0.5rem;
+    border: 1px solid #ddd;
+    border-radius: 4px;
+}
+
+body.admin-users .search-form button {
+    padding: 0.5rem 1rem;
+    background-color: #007bff;
+    color: white;
+    border: none;
+    border-radius: 4px;
+    cursor: pointer;
+    transition: background-color 0.2s ease;
+}
+
+body.admin-users .search-form button:hover {
+    background-color: #0056b3;
+}
+
+/* Pagination styles */
+body.admin-users .pagination {
+    margin-top: 1.5rem;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    gap: 1rem;
+}
+
+body.admin-users .pagination a {
+    text-decoration: none;
+    color: #007bff;
+    font-weight: bold;
+    padding: 0.5rem 1rem;
+    border: 1px solid #ddd;
+    border-radius: 4px;
+    transition: background-color 0.2s ease;
+}
+
+body.admin-users .pagination a:hover {
+    background-color: #f0f0f0;
+}
+
+body.admin-users .pagination span {
+    font-weight: bold;
+}
+
+/* Accordion styles */
+.accordion {
+    margin-top: 2rem;
+}
+
+.accordion-toggle {
+    background-color: #007bff;
+    color: white;
+    border: none;
+    border-radius: 4px;
+    padding: 0.75rem 1rem;
+    font-size: 1rem;
+    cursor: pointer;
+    transition: background-color 0.2s ease;
+    display: flex;
+    align-items: center;
+}
+
+.accordion-toggle:hover {
+    background-color: #0056b3;
+}
+
+.accordion-content {
+    display: none; /* Hidden by default */
+    margin-top: 1rem;
+    padding: 1rem;
+    border: 1px solid #ddd;
+    border-radius: 8px;
+    background-color: #f8f9fa;
+    box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+}
