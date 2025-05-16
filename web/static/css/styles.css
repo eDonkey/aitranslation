@@ -8,6 +8,7 @@ body {
 
 .card {
     border-radius: 10px;
+    border: 1px solid;
 }
 
 .navbar-brand {
@@ -54,23 +55,23 @@ footer {
 }
 
 /* Styles specific to the admin dashboard */
-body.admin-dashboard {
+.admin-dashboard {
     background-color: #e9ecef;
 }
 
-body.admin-dashboard h1 {
+.admin-dashboard h1 {
     color: #007bff;
 }
 
 /* Scoped styles for admin dashboard cards */
-body.admin-dashboard .card-container {
+.admin-dashboard .card-container {
     display: grid;
-    grid-template-columns: repeat(3, 1fr); /* 3 cards per row */
-    gap: 1.5rem; /* Space between cards */
+    grid-template-columns: 20% 20% 60%; /* First two cards 20%, third card 60% */
+    gap: 1.5rem;
     margin-top: 2rem;
 }
 
-body.admin-dashboard .card {
+.admin-dashboard .card {
     background-color: #ffffff;
     border: 1px solid #ddd;
     border-radius: 8px;
@@ -79,29 +80,29 @@ body.admin-dashboard .card {
     transition: transform 0.2s ease, box-shadow 0.2s ease;
 }
 
-body.admin-dashboard .card:nth-child(1) {
+.admin-dashboard .card:nth-child(1) {
     background-color: #f8d7da; /* Light red */
 }
 
-body.admin-dashboard .card:nth-child(2) {
+.admin-dashboard .card:nth-child(2) {
     background-color: #d4edda; /* Light green */
 }
 
-body.admin-dashboard .card:nth-child(3) {
+.admin-dashboard .card:nth-child(3) {
     background-color: #d1ecf1; /* Light blue */
 }
 
-body.admin-dashboard .card:hover {
+.admin-dashboard .card:hover {
     transform: translateY(-5px);
     box-shadow: 0 6px 10px rgba(0, 0, 0, 0.15);
 }
 
-body.admin-dashboard .card h3 {
+.admin-dashboard .card h3 {
     margin-top: 0;
     color: #333;
 }
 
-body.admin-dashboard .card p {
+.admin-dashboard .card p {
     margin: 0.5rem 0;
     color: #555;
 }

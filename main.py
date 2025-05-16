@@ -2,7 +2,7 @@ from fastapi import FastAPI, Header, HTTPException, Depends, Request, Form, Path
 from fastapi.responses import HTMLResponse, FileResponse, RedirectResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
-from sqlalchemy import create_engine, Column, Integer, String, Text, TIMESTAMP, text, Boolean, DateTime, func, Float, ForeignKey
+from sqlalchemy import create_engine, Column, Integer, String, Text, TIMESTAMP, text, Boolean, DateTime, func, Float, ForeignKey, desc
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker, Session, relationship
 from typing import Optional, List
@@ -388,7 +388,7 @@ async def get_current_active_admin(
 ) -> User:
     current_user = getattr(request.state, "user", None)
     if not current_user:
-        raise HTTPException(status_code=401, detail="Not authenticated")
+        return RedirectResponse(url="/login", status_code=303)
     if not current_user.is_active:
         raise HTTPException(status_code=403, detail="Inactive user")
     if not current_user.is_admin:
@@ -529,7 +529,7 @@ async def get_current_active_admin(
     current_user: Optional[User] = Depends(get_current_user)
 ) -> User:
     if not current_user:
-        raise HTTPException(status_code=401, detail="Not authenticated")
+        return RedirectResponse(url="/login", status_code=303)
     if not current_user.is_active:
         raise HTTPException(status_code=403, detail="Inactive user")
     if not current_user.is_admin:
@@ -542,8 +542,10 @@ async def login_for_access_token(
     form_data: OAuth2PasswordRequestForm = Depends(),
     db: Session = Depends(get_db)
 ):
+    logger.info(f"Login attempt for username: {form_data.username}")
     user = authenticate_user(db, form_data.username, form_data.password)
     if not user:
+        logger.info("Invalid login attempt.")
         raise HTTPException(
             status_code=401,
             detail="Incorrect username or password",
@@ -552,17 +554,22 @@ async def login_for_access_token(
     
     # Generate token
     access_token = create_access_token(data={"sub": user.username, "is_admin": user.is_admin})
+    logger.info(f"Generated token for user {user.username}: {access_token}")
     
-    return {
-        "access_token": access_token,
-        "token_type": "bearer",
-        "is_admin": user.is_admin  # Include admin flag in the response
-    }
-
-@app.post("/token")
-async def login(form_data: OAuth2PasswordRequestForm = Depends()):
-    logger.info(f"Login attempt: {form_data.username}")
-    # Your authentication logic here
+    # Set token in cookie
+    response = RedirectResponse(
+        url="/admin/dashboard" if user.is_admin else "/client/dashboard",
+        status_code=303
+    )
+    response.set_cookie(
+        key="access_token",
+        value=f"Bearer {access_token}",
+        httponly=True,
+        secure=False,  # Set to True in production with HTTPS
+        samesite="lax",
+        max_age=1800  # 30 minutes
+    )
+    return response
 
 @app.get("/login", response_class=HTMLResponse)
 async def login_page(request: Request):
@@ -586,62 +593,77 @@ async def logout(request: Request):
 @app.get("/admin/dashboard", response_class=HTMLResponse)
 async def admin_dashboard(
     request: Request,
+    current_user: User = Depends(get_current_active_admin),
     db: Session = Depends(get_db)
 ):
-    from datetime import datetime, timedelta
-
-    # Current time
+    logger.info(f"Accessing admin dashboard with user: {current_user.username}")
+    
+ # Current time
     now = datetime.utcnow()
 
-    # Fetch statistics from the database
+    # Time ranges
+    last_24_hours = now - timedelta(hours=24)
+    last_7_days = now - timedelta(days=7)
+    last_30_days = now - timedelta(days=30)
+
+    # Manual translations
+    manual_translations_last_24_hours = db.query(TextEntry).filter(
+        TextEntry.is_human_translation == True,
+        TextEntry.created_at >= last_24_hours
+    ).count()
+
+    manual_translations_last_7_days = db.query(TextEntry).filter(
+        TextEntry.is_human_translation == True,
+        TextEntry.created_at >= last_7_days
+    ).count()
+
+    manual_translations_last_30_days = db.query(TextEntry).filter(
+        TextEntry.is_human_translation == True,
+        TextEntry.created_at >= last_30_days
+    ).count()
+
+    # AI translations
+    ai_translations_last_24_hours = db.query(TextEntry).filter(
+        TextEntry.is_human_translation == False,
+        TextEntry.created_at >= last_24_hours
+    ).count()
+
+    ai_translations_last_7_days = db.query(TextEntry).filter(
+        TextEntry.is_human_translation == False,
+        TextEntry.created_at >= last_7_days
+    ).count()
+
+    ai_translations_last_30_days = db.query(TextEntry).filter(
+        TextEntry.is_human_translation == False,
+        TextEntry.created_at >= last_30_days
+    ).count()
+    # Top 10 API keys by usage
+    top_10_api_keys = db.query(
+        TextEntry.apikey_requested,
+        func.count(TextEntry.id).label("usage_count")
+    ).group_by(TextEntry.apikey_requested).order_by(desc("usage_count")).limit(10).all()
+
+    # Prepare stats object
     stats = {
         "manual_translations": {
-            "last_24_hours": db.query(TextEntry).filter(
-                TextEntry.is_human_translation == True,
-                TextEntry.updated_at >= now - timedelta(hours=24)
-            ).count(),
-            "last_7_days": db.query(TextEntry).filter(
-                TextEntry.is_human_translation == True,
-                TextEntry.updated_at >= now - timedelta(days=7)
-            ).count(),
-            "last_30_days": db.query(TextEntry).filter(
-                TextEntry.is_human_translation == True,
-                TextEntry.updated_at >= now - timedelta(days=30)
-            ).count(),
+            "last_24_hours": manual_translations_last_24_hours,
+            "last_7_days": manual_translations_last_7_days,
+            "last_30_days": manual_translations_last_30_days,
         },
         "ai_translations": {
-            "last_24_hours": db.query(TextEntry).filter(
-                TextEntry.is_human_translation == False,
-                TextEntry.created_at >= now - timedelta(hours=24)
-            ).count(),
-            "last_7_days": db.query(TextEntry).filter(
-                TextEntry.is_human_translation == False,
-                TextEntry.created_at >= now - timedelta(days=7)
-            ).count(),
-            "last_30_days": db.query(TextEntry).filter(
-                TextEntry.is_human_translation == False,
-                TextEntry.created_at >= now - timedelta(days=30)
-            ).count(),
+            "last_24_hours": ai_translations_last_24_hours,
+            "last_7_days": ai_translations_last_7_days,
+            "last_30_days": ai_translations_last_30_days,
         },
-        "top_10_api_keys": db.query(
-            APIKey.name, 
-            func.count(TextEntry.id).label("usage_count")
-        )
-        .join(TextEntry, TextEntry.apikey_requested == APIKey.key)
-        .group_by(APIKey.name)
-        .order_by(func.count(TextEntry.id).desc())
-        .limit(10)
-        .all(),
+        "top_10_api_keys": [(key, count) for key, count in top_10_api_keys]
     }
 
-    # Render the template with real data
-    return templates.TemplateResponse(
-        "admin_dashboard.html",
-        {
-            "request": request,
-            "stats": stats,
-        }
-    )
+    
+    return templates.TemplateResponse("admin_dashboard.html", {
+        "request": request,
+        "user": current_user,
+        "stats": stats  # Pass stats to the template
+    })
 
 @app.get("/admin/subscriptions", response_class=HTMLResponse)
 async def admin_subscriptions(
@@ -851,14 +873,20 @@ async def admin_keys(
         "request": request,
         "api_keys": api_keys
     })
+
 @app.get("/client/dashboard", response_class=HTMLResponse)
 async def client_dashboard(
     request: Request,
     current_user: User = Depends(get_current_user)
 ):
-    if current_user.is_admin:
-        raise HTTPException(status_code=403, detail="Access forbidden")
+    logger.info(f"Accessing client dashboard with user: {current_user.username}")
     
+    # Redirect admin users to the admin dashboard
+    if current_user.is_admin:
+        logger.info(f"User {current_user.username} is an admin. Redirecting to admin dashboard.")
+        return RedirectResponse(url="/admin/dashboard", status_code=303)
+    
+    # Render the client dashboard for non-admin users
     return templates.TemplateResponse("client_dashboard.html", {"request": request})
 
 @app.get("/client", response_class=HTMLResponse)
@@ -1150,6 +1178,41 @@ async def add_cors_headers(request: Request, call_next):
     response.headers["Expires"] = "0"
     return response
 
+@app.middleware("http")
+async def authenticate_user_middleware(request: Request, call_next):
+    # Skip authentication for login and static routes
+    if request.url.path in ["/login", "/token"] or request.url.path.startswith("/static"):
+        return await call_next(request)
+
+    # Get token from header or cookie
+    token = None
+    auth_cookie = request.cookies.get('access_token')
+    if auth_cookie and auth_cookie.startswith('Bearer '):
+        token = auth_cookie.split(' ')[1]
+        logger.info(f"Token found in cookie: {token}")
+    else:
+        logger.info("No token found. Redirecting to login.")
+        return RedirectResponse(url="/login", status_code=303)
+
+    try:
+        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+        username = payload.get("sub")
+        logger.info(f"Decoded token payload: {payload}")
+        if username:
+            db = SessionLocal()
+            try:
+                user = db.query(User).filter(User.username == username).first()
+                if user and user.is_active:
+                    request.state.user = user
+                    response = await call_next(request)
+                    return response
+            finally:
+                db.close()
+    except JWTError as e:
+        logger.error(f"JWT decoding error: {str(e)}")
+
+    return RedirectResponse(url="/login", status_code=303)
+
 @app.get("/admin/users", response_class=HTMLResponse)
 async def admin_users_page(
     request: Request,
@@ -1391,60 +1454,6 @@ async def request_password_reset(
     # Example: send_email(user.email, "Password Reset", f"Your reset token: {reset_token}")
     
     return {"message": f"Password reset token generated: {reset_token}"}
-
-@app.middleware("http")
-async def authenticate_user_middleware(request: Request, call_next):
-    # Skip authentication for login and static routes
-    if request.url.path in ["/login", "/token"] or request.url.path.startswith("/static"):
-        return await call_next(request)
-
-    # Get token from header or cookie
-    token = None
-    auth_header = request.headers.get('Authorization')
-    if auth_header and auth_header.startswith('Bearer '):
-        token = auth_header.split(' ')[1]
-    else:
-        auth_cookie = request.cookies.get('access_token')
-        if auth_cookie and auth_cookie.startswith('Bearer '):
-            token = auth_cookie.split(' ')[1]
-
-    if not token:
-        if request.url.path.startswith("/admin"):
-            return RedirectResponse(url="/login", status_code=303)
-        return await call_next(request)
-
-    try:
-        # Verify token and get user
-        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
-        username = payload.get("sub")
-        if username:
-            db = SessionLocal()
-            try:
-                user = db.query(User).filter(User.username == username).first()
-                if user and user.is_active:
-                    # Attach user to request state
-                    request.state.user = user
-                    response = await call_next(request)
-                    
-                    # Refresh token in cookie
-                    response.set_cookie(
-                        key="access_token",
-                        value=f"Bearer {token}",
-                        httponly=True,
-                        secure=True,
-                        samesite="lax",
-                        max_age=1800  # 30 minutes
-                    )
-                    return response
-            finally:
-                db.close()
-
-    except JWTError:
-        pass
-
-    if request.url.path.startswith("/admin"):
-        return RedirectResponse(url="/login", status_code=303)
-    return await call_next(request)
 
 # @app.on_event("startup")
 # async def alter_table():

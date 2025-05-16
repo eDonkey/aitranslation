@@ -44,19 +44,12 @@
         try {
             const response = await fetch('/token', {
                 method: 'POST',
-                body: formData
+                body: formData,
+                redirect: 'follow'  // Allow the server to handle redirection
             });
             
-            if (response.ok) {
-                const data = await response.json();
-                localStorage.setItem('access_token', data.access_token);
-
-                // Redirect based on user type
-                if (data.is_admin) {
-                    window.location.href = '/admin/dashboard';
-                } else {
-                    window.location.href = '/client/dashboard';
-                }
+            if (response.redirected) {
+                window.location.href = response.url;  // Follow the redirection
             } else {
                 const data = await response.json();
                 alert(data.detail || 'Login failed');
