@@ -89,8 +89,12 @@
     <header>
         <nav>
             <a href="/">Home</a>
-            <a href="/register">Register</a>
-            <a href="/login">Login</a>
+            {% if user %}
+                <a href="/logout">Logout</a>
+            {% else %}
+                <a href="/register">Register</a>
+                <a href="/login">Login</a>
+            {% endif %}
         </nav>
     </header>
     <main>
