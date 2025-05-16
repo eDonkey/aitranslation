@@ -877,7 +877,8 @@ async def admin_keys(
 @app.get("/client/dashboard", response_class=HTMLResponse)
 async def client_dashboard(
     request: Request,
-    current_user: User = Depends(get_current_user)
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
 ):
     logger.info(f"Accessing client dashboard with user: {current_user.username}")
     
@@ -886,8 +887,45 @@ async def client_dashboard(
         logger.info(f"User {current_user.username} is an admin. Redirecting to admin dashboard.")
         return RedirectResponse(url="/admin/dashboard", status_code=303)
     
-    # Render the client dashboard for non-admin users
-    return templates.TemplateResponse("client_dashboard.html", {"request": request})
+    # Fetch the last 10 human translations
+    human_translations = db.query(TextEntry)\
+        .filter(TextEntry.apikey_requested == current_user.api_key, TextEntry.is_human_translation == True)\
+        .order_by(TextEntry.created_at.desc())\
+        .limit(10)\
+        .all()
+
+    # Fetch the last 10 AI translations
+    ai_translations = db.query(TextEntry)\
+        .filter(TextEntry.apikey_requested == current_user.api_key, TextEntry.is_human_translation == False)\
+        .order_by(TextEntry.created_at.desc())\
+        .limit(10)\
+        .all()
+
+    # Prepare translation data
+    def prepare_translation_data(translations):
+        return [
+            {
+                "id": translation.id,
+                "created_at": translation.created_at,
+                "status": "Completed" if all(
+                    getattr(translation, lang) is not None for lang in ["english", "spanish", "portuguese", "french", "deutch", "italian"]
+                ) else "Pending",
+                "original_text": next(
+                    (getattr(translation, lang) for lang in ["english", "spanish", "portuguese", "french", "deutch", "italian"] if getattr(translation, lang) is not None),
+                    None
+                )
+            }
+            for translation in translations
+        ]
+
+    return templates.TemplateResponse("client_dashboard.html", {
+        "request": request,
+        "user": current_user,
+        "translations": {
+            "human": prepare_translation_data(human_translations),
+            "ai": prepare_translation_data(ai_translations)
+        }
+    })
 
 @app.get("/client", response_class=HTMLResponse)
 async def client_dashboard(
