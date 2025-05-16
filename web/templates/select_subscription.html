@@ -1,11 +1,11 @@
-{% extends "base.html" %}
+{% extends "public_base.html" %}
 
 {% block title %}Select Subscription{% endblock %}
 
 {% block content %}
-<body>
+<div class="container">
     <h1>Select a Subscription</h1>
-    <form method="POST" action="/simulate-payment">
+    <form method="POST" action="/simulate-payment" class="form-container">
         <input type="hidden" name="user_id" value="{{ user_id }}">
         <label for="subscription">Choose a subscription:</label>
         <select id="subscription" name="subscription_id" required>
@@ -15,7 +15,7 @@
             </option>
             {% endfor %}
         </select>
-        <button type="submit">Proceed to Payment</button>
+        <button type="submit" class="btn">Proceed to Payment</button>
     </form>
-</body>
+</div>
 {% endblock %}
