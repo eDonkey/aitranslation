@@ -514,6 +514,12 @@ def create_access_token(data: dict):
     encoded_jwt = jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
     return encoded_jwt
 
+def authenticate_user(db: Session, username: str, password: str) -> Optional[User]:
+    user = db.query(User).filter(User.username == username).first()
+    if user and verify_password(password, user.hashed_password):
+        return user
+    return None
+
 # User authentication functions
 async def get_current_user(request: Request) -> Optional[User]:
     return getattr(request.state, "user", None)
@@ -536,44 +542,22 @@ async def login_for_access_token(
     form_data: OAuth2PasswordRequestForm = Depends(),
     db: Session = Depends(get_db)
 ):
-    user = db.query(User).filter(User.username == form_data.username).first()
-    if not user or not verify_password(form_data.password, user.hashed_password):
-        return JSONResponse(status_code=401, content={"detail": "Incorrect username or password"})
-    
-    if not user.is_active:
+    user = authenticate_user(db, form_data.username, form_data.password)
+    if not user:
         raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="User account is inactive"
+            status_code=401,
+            detail="Incorrect username or password",
+            headers={"WWW-Authenticate": "Bearer"},
         )
     
-    access_token = create_access_token(data={"sub": user.username})
+    # Generate token
+    access_token = create_access_token(data={"sub": user.username, "is_admin": user.is_admin})
     
-    # Create response based on user type
-    response_data = {
+    return {
         "access_token": access_token,
         "token_type": "bearer",
-        "is_admin": user.is_admin,
-        "username": user.username
+        "is_admin": user.is_admin  # Include admin flag in the response
     }
-    
-    response = JSONResponse(response_data)
-    
-    # Set cookie with token
-    response.set_cookie(
-        key="access_token",
-        value=f"Bearer {access_token}",
-        httponly=True,
-        secure=True,
-        samesite="lax",
-        max_age=1800  # 30 minutes
-    )
-    
-    # If not admin, redirect to appropriate page
-    if not user.is_admin:
-        response.headers["Location"] = "/client"
-        response.status_code = status.HTTP_303_SEE_OTHER
-    
-    return response
 
 @app.post("/token")
 async def login(form_data: OAuth2PasswordRequestForm = Depends()):
@@ -867,6 +851,15 @@ async def admin_keys(
         "request": request,
         "api_keys": api_keys
     })
+@app.get("/client/dashboard", response_class=HTMLResponse)
+async def client_dashboard(
+    request: Request,
+    current_user: User = Depends(get_current_user)
+):
+    if current_user.is_admin:
+        raise HTTPException(status_code=403, detail="Access forbidden")
+    
+    return templates.TemplateResponse("client_dashboard.html", {"request": request})
 
 @app.get("/client", response_class=HTMLResponse)
 async def client_dashboard(

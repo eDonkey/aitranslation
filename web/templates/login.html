@@ -48,17 +48,14 @@
             });
             
             if (response.ok) {
-                const contentType = response.headers.get("content-type");
-                if (contentType && contentType.includes("application/json")) {
-                    const data = await response.json();
-                    if (data.is_admin) {
-                        window.location.href = '/admin/dashboard';
-                    } else {
-                        window.location.href = '/client';
-                    }
+                const data = await response.json();
+                localStorage.setItem('access_token', data.access_token);
+
+                // Redirect based on user type
+                if (data.is_admin) {
+                    window.location.href = '/admin/dashboard';
                 } else {
-                    // Handle redirect
-                    window.location.href = response.headers.get("Location") || '/client';
+                    window.location.href = '/client/dashboard';
                 }
             } else {
                 const data = await response.json();
