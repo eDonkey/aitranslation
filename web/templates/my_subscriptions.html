@@ -1,0 +1,29 @@
+{% extends "base.html" %}
+
+{% block title %}My Subscriptions{% endblock %}
+
+{% block content %}
+<body class="my-subscriptions">
+    <h1>My Subscriptions</h1>
+    <table>
+        <thead>
+            <tr>
+                <th>Name</th>
+                <th>Start Date</th>
+                <th>Renew Date</th>
+                <th>Status</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for subscription in subscriptions %}
+            <tr>
+                <td>{{ subscription.subscription.name }}</td>
+                <td>{{ subscription.start_date }}</td>
+                <td>{{ subscription.renew_date }}</td>
+                <td>{{ "Active" if subscription.is_active else "Inactive" }}</td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+</body>
+{% endblock %}

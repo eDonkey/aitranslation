@@ -2,9 +2,9 @@ from fastapi import FastAPI, Header, HTTPException, Depends, Request, Form, Path
 from fastapi.responses import HTMLResponse, FileResponse, RedirectResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
-from sqlalchemy import create_engine, Column, Integer, String, Text, TIMESTAMP, text, Boolean, DateTime, func
+from sqlalchemy import create_engine, Column, Integer, String, Text, TIMESTAMP, text, Boolean, DateTime, func, Float, ForeignKey
 from sqlalchemy.ext.declarative import declarative_base
-from sqlalchemy.orm import sessionmaker, Session
+from sqlalchemy.orm import sessionmaker, Session, relationship
 from typing import Optional, List
 from datetime import datetime, timedelta
 from pydantic import BaseModel
@@ -21,6 +21,10 @@ from jose import JWTError, jwt
 from starlette.status import HTTP_303_SEE_OTHER, HTTP_307_TEMPORARY_REDIRECT
 import bcrypt
 import logging
+from jinja2 import Environment
+from markupsafe import escape
+from alembic import op
+import sqlalchemy as sa
 
 logger = logging.getLogger("uvicorn.error")
 
@@ -105,6 +109,29 @@ class User(Base):
     model_permission = Column(String, default=ModelPermission.NONE)
     created_at = Column(DateTime, default=datetime.utcnow)
     api_key = Column(String, unique=True, nullable=True)
+    subscriptions = relationship("UserSubscription", back_populates="user")
+
+class Subscription(Base):
+    __tablename__ = "subscriptions"
+
+    id = Column(Integer, primary_key=True, index=True)
+    name = Column(String, unique=True, nullable=False)  # AI ONLY, HUMAN ONLY, FULL PACKAGE
+    price = Column(Float, nullable=False)  # Price of the subscription
+    description = Column(String, nullable=True)  # Optional description
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+class UserSubscription(Base):
+    __tablename__ = "user_subscriptions"
+
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
+    subscription_id = Column(Integer, ForeignKey("subscriptions.id"), nullable=False)
+    is_active = Column(Boolean, default=True)
+    start_date = Column(DateTime, default=datetime.utcnow)
+    renew_date = Column(DateTime, nullable=True)  # Next renewal date
+    end_date = Column(DateTime, nullable=True)  # Optional for expiration
+    user = relationship("User", back_populates="subscriptions")
+    subscription = relationship("Subscription")
 
 # Create tables
 Base.metadata.create_all(bind=engine)
@@ -408,11 +435,53 @@ openai.api_key = os.getenv("OPENAI_API_KEY")
 templates = Jinja2Templates(directory="web/templates")
 app.mount("/static", StaticFiles(directory="web/static"), name="static")
 
+def escapejs(value):
+    return escape(value).replace("'", "\\'").replace('"', '\\"')
+
+# Add the filter to your Jinja2 environment
+templates.env.filters['escapejs'] = escapejs
+
 @app.get("/", response_class=HTMLResponse)
 async def home(request: Request):
     return templates.TemplateResponse("traductor.html", {
         "request": request,
         # Add any additional context data here if needed
+    })
+
+@app.get("/register", response_class=HTMLResponse)
+async def register_page(request: Request):
+    return templates.TemplateResponse("register.html", {"request": request})
+
+@app.post("/register")
+async def register_user(
+    username: str = Form(...),
+    email: str = Form(...),
+    password: str = Form(...),
+    db: Session = Depends(get_db)
+):
+    # Check if the username or email already exists
+    if db.query(User).filter(User.username == username).first():
+        raise HTTPException(status_code=400, detail="Username already exists")
+    if db.query(User).filter(User.email == email).first():
+        raise HTTPException(status_code=400, detail="Email already exists")
+    
+    # Create the user
+    hashed_password = get_password_hash(password)
+    new_user = User(username=username, email=email, hashed_password=hashed_password, is_active=True)
+    db.add(new_user)
+    db.commit()
+    db.refresh(new_user)
+    
+    # Redirect to subscription selection
+    return RedirectResponse(url=f"/select-subscription?user_id={new_user.id}", status_code=303)
+
+@app.get("/select-subscription", response_class=HTMLResponse)
+async def select_subscription_page(user_id: int, request: Request, db: Session = Depends(get_db)):
+    subscriptions = db.query(Subscription).all()
+    return templates.TemplateResponse("select_subscription.html", {
+        "request": request,
+        "user_id": user_id,
+        "subscriptions": subscriptions
     })
 
 # Authentication constants and dependencies
@@ -574,6 +643,144 @@ async def admin_dashboard(
             "stats": stats,
         }
     )
+
+@app.get("/admin/subscriptions", response_class=HTMLResponse)
+async def admin_subscriptions(
+    request: Request,
+    current_user: User = Depends(get_current_active_admin),
+    db: Session = Depends(get_db)
+):
+    subscriptions = db.query(Subscription).all()
+    return templates.TemplateResponse("admin_subscriptions.html", {
+        "request": request,
+        "subscriptions": subscriptions
+    })
+
+@app.post("/admin/subscriptions")
+async def create_or_update_subscription(
+    id: Optional[int] = Form(None),  # Make `id` optional
+    name: str = Form(...),
+    price: float = Form(...),
+    description: str = Form(None),
+    current_user: User = Depends(get_current_active_admin),
+    db: Session = Depends(get_db)
+):
+    if id:
+        # Update existing subscription
+        subscription = db.query(Subscription).filter(Subscription.id == id).first()
+        if not subscription:
+            raise HTTPException(status_code=404, detail="Subscription not found")
+        subscription.name = name
+        subscription.price = price
+        subscription.description = description
+    else:
+        # Create new subscription
+        subscription = Subscription(name=name, price=price, description=description)
+        db.add(subscription)
+    db.commit()
+    return RedirectResponse(url="/admin/subscriptions", status_code=303)
+
+@app.post("/subscribe/{subscription_id}")
+async def subscribe_to_plan(
+    subscription_id: int,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    subscription = db.query(Subscription).filter(Subscription.id == subscription_id).first()
+    if not subscription:
+        raise HTTPException(status_code=404, detail="Subscription not found")
+    
+    # Create or update user subscription
+    user_subscription = db.query(UserSubscription).filter(
+        UserSubscription.user_id == current_user.id,
+        UserSubscription.subscription_id == subscription_id
+    ).first()
+    if user_subscription:
+        user_subscription.is_active = True
+        user_subscription.start_date = datetime.utcnow()
+        user_subscription.renew_date = datetime.utcnow() + timedelta(days=30)
+    else:
+        user_subscription = UserSubscription(
+            user_id=current_user.id,
+            subscription_id=subscription_id,
+            is_active=True,
+            start_date=datetime.utcnow(),
+            renew_date=datetime.utcnow() + timedelta(days=30)
+        )
+        db.add(user_subscription)
+    db.commit()
+    return {"message": f"Subscribed to {subscription.name} successfully"}
+
+@app.post("/renew/{subscription_id}")
+async def renew_subscription(
+    subscription_id: int,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    user_subscription = db.query(UserSubscription).filter(
+        UserSubscription.user_id == current_user.id,
+        UserSubscription.subscription_id == subscription_id,
+        UserSubscription.is_active == True
+    ).first()
+    if not user_subscription:
+        raise HTTPException(status_code=404, detail="Active subscription not found")
+    
+    # Update the renew date
+    user_subscription.renew_date = user_subscription.renew_date + timedelta(days=30)
+    db.commit()
+    return {"message": f"Subscription renewed successfully. Next renewal date: {user_subscription.renew_date}"}
+
+@app.post("/payment/simulate")
+async def simulate_payment(
+    subscription_id: int,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    subscription = db.query(Subscription).filter(Subscription.id == subscription_id).first()
+    if not subscription:
+        raise HTTPException(status_code=404, detail="Subscription not found")
+    
+    # Simulate payment success
+    return {"message": f"Payment for {subscription.name} (${subscription.price}) successful"}
+
+@app.post("/simulate-payment")
+async def simulate_payment(
+    user_id: int = Form(...),
+    subscription_id: int = Form(...),
+    db: Session = Depends(get_db)
+):
+    # Fetch the subscription
+    subscription = db.query(Subscription).filter(Subscription.id == subscription_id).first()
+    if not subscription:
+        raise HTTPException(status_code=404, detail="Subscription not found")
+    
+    # Simulate payment success
+    user_subscription = UserSubscription(
+        user_id=user_id,
+        subscription_id=subscription_id,
+        is_active=True,
+        start_date=datetime.utcnow(),
+        renew_date=datetime.utcnow() + timedelta(days=30)
+    )
+    db.add(user_subscription)
+    db.commit()
+    
+    return RedirectResponse(url="/my-subscriptions", status_code=303)
+
+@app.get("/my-subscriptions", response_class=HTMLResponse)
+async def my_subscriptions(
+    request: Request,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    subscriptions = db.query(UserSubscription).filter(
+        UserSubscription.user_id == current_user.id,
+        UserSubscription.is_active == True
+    ).all()
+    return templates.TemplateResponse("my_subscriptions.html", {
+        "request": request,
+        "subscriptions": subscriptions
+    })
 
 @app.exception_handler(HTTPException)
 async def http_exception_handler(request: Request, exc: HTTPException):
@@ -1243,6 +1450,13 @@ async def authenticate_user_middleware(request: Request, call_next):
 #             connection.commit()
 #         except Exception as e:
 #             print(f"Migration error: {str(e)}")
+
+# Add renew_date column
+def upgrade():
+    op.add_column('user_subscriptions', sa.Column('renew_date', sa.DateTime(), nullable=True))
+
+def downgrade():
+    op.drop_column('user_subscriptions', 'renew_date')
 
 if __name__ == '__main__':
     uvicorn.run('main:app', host='0.0.0.0', port=8000)
