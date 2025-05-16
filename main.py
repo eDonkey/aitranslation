@@ -1219,7 +1219,7 @@ async def add_cors_headers(request: Request, call_next):
 @app.middleware("http")
 async def authenticate_user_middleware(request: Request, call_next):
     # Skip authentication for login and static routes
-    if request.url.path in ["/login", "/token"] or request.url.path.startswith("/static"):
+    if request.url.path in ["/", "/login", "/register", "/token"] or request.url.path.startswith("/static"):
         return await call_next(request)
 
     # Get token from header or cookie
