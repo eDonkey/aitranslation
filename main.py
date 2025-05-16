@@ -584,6 +584,21 @@ async def login(form_data: OAuth2PasswordRequestForm = Depends()):
 async def login_page(request: Request):
     return templates.TemplateResponse("login.html", {"request": request})
 
+@app.get("/logout")
+async def logout(request: Request):
+    response = RedirectResponse(url="/login", status_code=303)
+    response.delete_cookie("access_token")
+    return response
+
+@app.post("/logout")
+async def logout(request: Request):
+    """
+    Logs out the current user by clearing the authentication cookie.
+    """
+    response = RedirectResponse(url="/", status_code=303)
+    response.delete_cookie(key="access_token", httponly=True, secure=True, samesite="lax")
+    return response
+
 @app.get("/admin/dashboard", response_class=HTMLResponse)
 async def admin_dashboard(
     request: Request,
