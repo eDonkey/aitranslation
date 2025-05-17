@@ -92,10 +92,10 @@ class APIKey(Base):
     is_active = Column(Boolean, default=True)
 
 class ModelPermission(str, Enum):
-    AI_ONLY = "ai_only"
-    HUMAN_ONLY = "human_only"
-    BOTH = "both"
-    NONE = "none"
+    AI_ONLY = "AI ONLY"
+    HUMAN_ONLY = "HUMAN ONLY"
+    BOTH = "BOTH"
+    NONE = "NONE"
 
 class User(Base):
     __tablename__ = "users"
@@ -178,25 +178,78 @@ async def save_text(
     db: Session = Depends(get_db),
     api_key: str = Depends(validate_api_key)
 ):
-    db_text = TextEntry(
-        english=None,
-        spanish=None,
-        portuguese=None,
-        french=None,
-        deutch=None,
-        italian=None,
-        apikey_requested=api_key
-    )
-    setattr(db_text, request.language.value, request.text)
+    # Validate the API key
+    db_key = db.query(APIKey).filter(
+        APIKey.key == api_key,
+        APIKey.is_active == True
+    ).first()
     
-    db.add(db_text)
-    db.commit()
-    db.refresh(db_text)
+    if not db_key:
+        raise HTTPException(
+            status_code=401,
+            detail="Invalid API Key"
+        )
     
-    return {
-        "message": f"Text saved successfully in {request.language.value}",
-        "id": db_text.id
-    }
+    # Get the user associated with the API key
+    user = db.query(User).filter(User.api_key == api_key).first()
+    if not user:
+        raise HTTPException(
+            status_code=401,
+            detail="User not found for the provided API Key"
+        )
+    
+    # Check the user's model permission
+    if user.model_permission == ModelPermission.HUMAN_ONLY:
+        # Save the text entry for manual translation
+        db_text = TextEntry(
+            english=None,
+            spanish=None,
+            portuguese=None,
+            french=None,
+            deutch=None,
+            italian=None,
+            apikey_requested=api_key,
+            is_human_translation=True
+        )
+        setattr(db_text, request.language.value, request.text)
+        
+        db.add(db_text)
+        db.commit()
+        db.refresh(db_text)
+        
+        return {
+            "message": f"Text saved for manual translation in {request.language.value}",
+            "id": db_text.id
+        }
+    
+    elif user.model_permission == ModelPermission.AI_ONLY:
+        # Forward the request to the /translate-text endpoint
+        try:
+            response = await translate_text(
+                text=request.text,
+                language=request.language,
+                db=db,
+                api_key=api_key
+            )
+            
+            # Return the response from /translate-text without creating a new TextEntry
+            return {
+                "message": "Text translated and saved successfully",
+                "id": response["id"],
+                "translations": response["translations"]
+            }
+        
+        except HTTPException as e:
+            raise HTTPException(
+                status_code=e.status_code,
+                detail=f"AI translation failed: {e.detail}"
+            )
+    
+    else:
+        raise HTTPException(
+            status_code=403,
+            detail="Your API key does not have the required permissions for this operation"
+        )
 
 @app.get("/get-texts/")
 async def get_texts(
@@ -1245,6 +1298,10 @@ async def add_cors_headers(request: Request, call_next):
 async def authenticate_user_middleware(request: Request, call_next):
     # Skip authentication for login and static routes
     if request.url.path in ["/", "/login", "/register", "/token", "/select-subscription", "/simulate-payment"] or request.url.path.startswith("/static"):
+        return await call_next(request)
+
+    # Skip authentication for API routes using X-API-Key
+    if request.url.path.startswith("/save-text") or request.headers.get("X-API-Key"):
         return await call_next(request)
 
     # Get token from header or cookie
