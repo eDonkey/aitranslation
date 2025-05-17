@@ -775,7 +775,28 @@ async def simulate_payment(
     if not subscription:
         raise HTTPException(status_code=404, detail="Subscription not found")
     
-    # Simulate payment success
+    # Create an API key for the user
+    api_key = token_urlsafe(32)
+    db_api_key = APIKey(
+        key=api_key,
+        name=f"Key for user {user_id}",
+        is_active=True,
+        created_at=datetime.utcnow()
+    )
+    db.add(db_api_key)
+    db.commit()
+    db.refresh(db_api_key)
+
+    # Update the user's subscription and API key
+    user = db.query(User).filter(User.id == user_id).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+    
+    user.api_key = api_key
+    user.model_permission = subscription.name.upper()  # Save the subscription name as the model permission
+    db.commit()
+
+    # Simulate payment success and create a user subscription
     user_subscription = UserSubscription(
         user_id=user_id,
         subscription_id=subscription_id,
@@ -794,12 +815,16 @@ async def my_subscriptions(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
+    if not current_user:
+        return RedirectResponse(url="/login", status_code=303)
+
     subscriptions = db.query(UserSubscription).filter(
         UserSubscription.user_id == current_user.id,
         UserSubscription.is_active == True
     ).all()
     return templates.TemplateResponse("my_subscriptions.html", {
         "request": request,
+        "user": current_user,  # Pass the user object to the template
         "subscriptions": subscriptions
     })
 
@@ -1219,7 +1244,7 @@ async def add_cors_headers(request: Request, call_next):
 @app.middleware("http")
 async def authenticate_user_middleware(request: Request, call_next):
     # Skip authentication for login and static routes
-    if request.url.path in ["/", "/login", "/register", "/token"] or request.url.path.startswith("/static"):
+    if request.url.path in ["/", "/login", "/register", "/token", "/select-subscription", "/simulate-payment"] or request.url.path.startswith("/static"):
         return await call_next(request)
 
     # Get token from header or cookie
@@ -1507,11 +1532,11 @@ async def request_password_reset(
 #             print(f"Migration error: {str(e)}")
 
 # Add renew_date column
-def upgrade():
-    op.add_column('user_subscriptions', sa.Column('renew_date', sa.DateTime(), nullable=True))
+# def upgrade():
+#     op.add_column('user_subscriptions', sa.Column('renew_date', sa.DateTime(), nullable=True))
 
-def downgrade():
-    op.drop_column('user_subscriptions', 'renew_date')
+# def downgrade():
+#     op.drop_column('user_subscriptions', 'renew_date')
 
 if __name__ == '__main__':
     uvicorn.run('main:app', host='0.0.0.0', port=8000)
