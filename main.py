@@ -2,9 +2,9 @@ from fastapi import FastAPI, Header, HTTPException, Depends, Request, Form, Path
 from fastapi.responses import HTMLResponse, FileResponse, RedirectResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
-from sqlalchemy import create_engine, Column, Integer, String, Text, TIMESTAMP, text, Boolean, DateTime, func
+from sqlalchemy import create_engine, Column, Integer, String, Text, TIMESTAMP, text, Boolean, DateTime, func, Float, ForeignKey, desc
 from sqlalchemy.ext.declarative import declarative_base
-from sqlalchemy.orm import sessionmaker, Session
+from sqlalchemy.orm import sessionmaker, Session, relationship
 from typing import Optional, List
 from datetime import datetime, timedelta
 from pydantic import BaseModel
@@ -21,6 +21,10 @@ from jose import JWTError, jwt
 from starlette.status import HTTP_303_SEE_OTHER, HTTP_307_TEMPORARY_REDIRECT
 import bcrypt
 import logging
+from jinja2 import Environment
+from markupsafe import escape
+from alembic import op
+import sqlalchemy as sa
 
 logger = logging.getLogger("uvicorn.error")
 
@@ -88,10 +92,10 @@ class APIKey(Base):
     is_active = Column(Boolean, default=True)
 
 class ModelPermission(str, Enum):
-    AI_ONLY = "ai_only"
-    HUMAN_ONLY = "human_only"
-    BOTH = "both"
-    NONE = "none"
+    AI_ONLY = "AI ONLY"
+    HUMAN_ONLY = "HUMAN ONLY"
+    BOTH = "BOTH"
+    NONE = "NONE"
 
 class User(Base):
     __tablename__ = "users"
@@ -105,6 +109,29 @@ class User(Base):
     model_permission = Column(String, default=ModelPermission.NONE)
     created_at = Column(DateTime, default=datetime.utcnow)
     api_key = Column(String, unique=True, nullable=True)
+    subscriptions = relationship("UserSubscription", back_populates="user")
+
+class Subscription(Base):
+    __tablename__ = "subscriptions"
+
+    id = Column(Integer, primary_key=True, index=True)
+    name = Column(String, unique=True, nullable=False)  # AI ONLY, HUMAN ONLY, FULL PACKAGE
+    price = Column(Float, nullable=False)  # Price of the subscription
+    description = Column(String, nullable=True)  # Optional description
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+class UserSubscription(Base):
+    __tablename__ = "user_subscriptions"
+
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
+    subscription_id = Column(Integer, ForeignKey("subscriptions.id"), nullable=False)
+    is_active = Column(Boolean, default=True)
+    start_date = Column(DateTime, default=datetime.utcnow)
+    renew_date = Column(DateTime, nullable=True)  # Next renewal date
+    end_date = Column(DateTime, nullable=True)  # Optional for expiration
+    user = relationship("User", back_populates="subscriptions")
+    subscription = relationship("Subscription")
 
 # Create tables
 Base.metadata.create_all(bind=engine)
@@ -151,25 +178,78 @@ async def save_text(
     db: Session = Depends(get_db),
     api_key: str = Depends(validate_api_key)
 ):
-    db_text = TextEntry(
-        english=None,
-        spanish=None,
-        portuguese=None,
-        french=None,
-        deutch=None,
-        italian=None,
-        apikey_requested=api_key
-    )
-    setattr(db_text, request.language.value, request.text)
+    # Validate the API key
+    db_key = db.query(APIKey).filter(
+        APIKey.key == api_key,
+        APIKey.is_active == True
+    ).first()
     
-    db.add(db_text)
-    db.commit()
-    db.refresh(db_text)
+    if not db_key:
+        raise HTTPException(
+            status_code=401,
+            detail="Invalid API Key"
+        )
     
-    return {
-        "message": f"Text saved successfully in {request.language.value}",
-        "id": db_text.id
-    }
+    # Get the user associated with the API key
+    user = db.query(User).filter(User.api_key == api_key).first()
+    if not user:
+        raise HTTPException(
+            status_code=401,
+            detail="User not found for the provided API Key"
+        )
+    
+    # Check the user's model permission
+    if user.model_permission == ModelPermission.HUMAN_ONLY:
+        # Save the text entry for manual translation
+        db_text = TextEntry(
+            english=None,
+            spanish=None,
+            portuguese=None,
+            french=None,
+            deutch=None,
+            italian=None,
+            apikey_requested=api_key,
+            is_human_translation=True
+        )
+        setattr(db_text, request.language.value, request.text)
+        
+        db.add(db_text)
+        db.commit()
+        db.refresh(db_text)
+        
+        return {
+            "message": f"Text saved for manual translation in {request.language.value}",
+            "id": db_text.id
+        }
+    
+    elif user.model_permission == ModelPermission.AI_ONLY:
+        # Forward the request to the /translate-text endpoint
+        try:
+            response = await translate_text(
+                text=request.text,
+                language=request.language,
+                db=db,
+                api_key=api_key
+            )
+            
+            # Return the response from /translate-text without creating a new TextEntry
+            return {
+                "message": "Text translated and saved successfully",
+                "id": response["id"],
+                "translations": response["translations"]
+            }
+        
+        except HTTPException as e:
+            raise HTTPException(
+                status_code=e.status_code,
+                detail=f"AI translation failed: {e.detail}"
+            )
+    
+    else:
+        raise HTTPException(
+            status_code=403,
+            detail="Your API key does not have the required permissions for this operation"
+        )
 
 @app.get("/get-texts/")
 async def get_texts(
@@ -361,7 +441,7 @@ async def get_current_active_admin(
 ) -> User:
     current_user = getattr(request.state, "user", None)
     if not current_user:
-        raise HTTPException(status_code=401, detail="Not authenticated")
+        return RedirectResponse(url="/login", status_code=303)
     if not current_user.is_active:
         raise HTTPException(status_code=403, detail="Inactive user")
     if not current_user.is_admin:
@@ -408,11 +488,53 @@ openai.api_key = os.getenv("OPENAI_API_KEY")
 templates = Jinja2Templates(directory="web/templates")
 app.mount("/static", StaticFiles(directory="web/static"), name="static")
 
+def escapejs(value):
+    return escape(value).replace("'", "\\'").replace('"', '\\"')
+
+# Add the filter to your Jinja2 environment
+templates.env.filters['escapejs'] = escapejs
+
 @app.get("/", response_class=HTMLResponse)
 async def home(request: Request):
     return templates.TemplateResponse("traductor.html", {
         "request": request,
         # Add any additional context data here if needed
+    })
+
+@app.get("/register", response_class=HTMLResponse)
+async def register_page(request: Request):
+    return templates.TemplateResponse("register.html", {"request": request})
+
+@app.post("/register")
+async def register_user(
+    username: str = Form(...),
+    email: str = Form(...),
+    password: str = Form(...),
+    db: Session = Depends(get_db)
+):
+    # Check if the username or email already exists
+    if db.query(User).filter(User.username == username).first():
+        raise HTTPException(status_code=400, detail="Username already exists")
+    if db.query(User).filter(User.email == email).first():
+        raise HTTPException(status_code=400, detail="Email already exists")
+    
+    # Create the user
+    hashed_password = get_password_hash(password)
+    new_user = User(username=username, email=email, hashed_password=hashed_password, is_active=True)
+    db.add(new_user)
+    db.commit()
+    db.refresh(new_user)
+    
+    # Redirect to subscription selection
+    return RedirectResponse(url=f"/select-subscription?user_id={new_user.id}", status_code=303)
+
+@app.get("/select-subscription", response_class=HTMLResponse)
+async def select_subscription_page(user_id: int, request: Request, db: Session = Depends(get_db)):
+    subscriptions = db.query(Subscription).all()
+    return templates.TemplateResponse("select_subscription.html", {
+        "request": request,
+        "user_id": user_id,
+        "subscriptions": subscriptions
     })
 
 # Authentication constants and dependencies
@@ -445,6 +567,12 @@ def create_access_token(data: dict):
     encoded_jwt = jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
     return encoded_jwt
 
+def authenticate_user(db: Session, username: str, password: str) -> Optional[User]:
+    user = db.query(User).filter(User.username == username).first()
+    if user and verify_password(password, user.hashed_password):
+        return user
+    return None
+
 # User authentication functions
 async def get_current_user(request: Request) -> Optional[User]:
     return getattr(request.state, "user", None)
@@ -454,7 +582,7 @@ async def get_current_active_admin(
     current_user: Optional[User] = Depends(get_current_user)
 ) -> User:
     if not current_user:
-        raise HTTPException(status_code=401, detail="Not authenticated")
+        return RedirectResponse(url="/login", status_code=303)
     if not current_user.is_active:
         raise HTTPException(status_code=403, detail="Inactive user")
     if not current_user.is_admin:
@@ -467,113 +595,291 @@ async def login_for_access_token(
     form_data: OAuth2PasswordRequestForm = Depends(),
     db: Session = Depends(get_db)
 ):
-    user = db.query(User).filter(User.username == form_data.username).first()
-    if not user or not verify_password(form_data.password, user.hashed_password):
-        return JSONResponse(status_code=401, content={"detail": "Incorrect username or password"})
-    
-    if not user.is_active:
+    logger.info(f"Login attempt for username: {form_data.username}")
+    user = authenticate_user(db, form_data.username, form_data.password)
+    if not user:
+        logger.info("Invalid login attempt.")
         raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="User account is inactive"
+            status_code=401,
+            detail="Incorrect username or password",
+            headers={"WWW-Authenticate": "Bearer"},
         )
     
-    access_token = create_access_token(data={"sub": user.username})
+    # Generate token
+    access_token = create_access_token(data={"sub": user.username, "is_admin": user.is_admin})
+    logger.info(f"Generated token for user {user.username}: {access_token}")
     
-    # Create response based on user type
-    response_data = {
-        "access_token": access_token,
-        "token_type": "bearer",
-        "is_admin": user.is_admin,
-        "username": user.username
-    }
-    
-    response = JSONResponse(response_data)
-    
-    # Set cookie with token
+    # Set token in cookie
+    response = RedirectResponse(
+        url="/admin/dashboard" if user.is_admin else "/client/dashboard",
+        status_code=303
+    )
     response.set_cookie(
         key="access_token",
         value=f"Bearer {access_token}",
         httponly=True,
-        secure=True,
+        secure=False,  # Set to True in production with HTTPS
         samesite="lax",
         max_age=1800  # 30 minutes
     )
-    
-    # If not admin, redirect to appropriate page
-    if not user.is_admin:
-        response.headers["Location"] = "/client"
-        response.status_code = status.HTTP_303_SEE_OTHER
-    
     return response
-
-@app.post("/token")
-async def login(form_data: OAuth2PasswordRequestForm = Depends()):
-    logger.info(f"Login attempt: {form_data.username}")
-    # Your authentication logic here
 
 @app.get("/login", response_class=HTMLResponse)
 async def login_page(request: Request):
     return templates.TemplateResponse("login.html", {"request": request})
 
+@app.get("/logout")
+async def logout(request: Request):
+    response = RedirectResponse(url="/login", status_code=303)
+    response.delete_cookie("access_token")
+    return response
+
+@app.post("/logout")
+async def logout(request: Request):
+    """
+    Logs out the current user by clearing the authentication cookie.
+    """
+    response = RedirectResponse(url="/", status_code=303)
+    response.delete_cookie(key="access_token", httponly=True, secure=True, samesite="lax")
+    return response
+
 @app.get("/admin/dashboard", response_class=HTMLResponse)
 async def admin_dashboard(
     request: Request,
+    current_user: User = Depends(get_current_active_admin),
     db: Session = Depends(get_db)
 ):
-    from datetime import datetime, timedelta
-
-    # Current time
+    logger.info(f"Accessing admin dashboard with user: {current_user.username}")
+    
+ # Current time
     now = datetime.utcnow()
 
-    # Fetch statistics from the database
+    # Time ranges
+    last_24_hours = now - timedelta(hours=24)
+    last_7_days = now - timedelta(days=7)
+    last_30_days = now - timedelta(days=30)
+
+    # Manual translations
+    manual_translations_last_24_hours = db.query(TextEntry).filter(
+        TextEntry.is_human_translation == True,
+        TextEntry.created_at >= last_24_hours
+    ).count()
+
+    manual_translations_last_7_days = db.query(TextEntry).filter(
+        TextEntry.is_human_translation == True,
+        TextEntry.created_at >= last_7_days
+    ).count()
+
+    manual_translations_last_30_days = db.query(TextEntry).filter(
+        TextEntry.is_human_translation == True,
+        TextEntry.created_at >= last_30_days
+    ).count()
+
+    # AI translations
+    ai_translations_last_24_hours = db.query(TextEntry).filter(
+        TextEntry.is_human_translation == False,
+        TextEntry.created_at >= last_24_hours
+    ).count()
+
+    ai_translations_last_7_days = db.query(TextEntry).filter(
+        TextEntry.is_human_translation == False,
+        TextEntry.created_at >= last_7_days
+    ).count()
+
+    ai_translations_last_30_days = db.query(TextEntry).filter(
+        TextEntry.is_human_translation == False,
+        TextEntry.created_at >= last_30_days
+    ).count()
+    # Top 10 API keys by usage
+    top_10_api_keys = db.query(
+        TextEntry.apikey_requested,
+        func.count(TextEntry.id).label("usage_count")
+    ).group_by(TextEntry.apikey_requested).order_by(desc("usage_count")).limit(10).all()
+
+    # Prepare stats object
     stats = {
         "manual_translations": {
-            "last_24_hours": db.query(TextEntry).filter(
-                TextEntry.is_human_translation == True,
-                TextEntry.updated_at >= now - timedelta(hours=24)
-            ).count(),
-            "last_7_days": db.query(TextEntry).filter(
-                TextEntry.is_human_translation == True,
-                TextEntry.updated_at >= now - timedelta(days=7)
-            ).count(),
-            "last_30_days": db.query(TextEntry).filter(
-                TextEntry.is_human_translation == True,
-                TextEntry.updated_at >= now - timedelta(days=30)
-            ).count(),
+            "last_24_hours": manual_translations_last_24_hours,
+            "last_7_days": manual_translations_last_7_days,
+            "last_30_days": manual_translations_last_30_days,
         },
         "ai_translations": {
-            "last_24_hours": db.query(TextEntry).filter(
-                TextEntry.is_human_translation == False,
-                TextEntry.created_at >= now - timedelta(hours=24)
-            ).count(),
-            "last_7_days": db.query(TextEntry).filter(
-                TextEntry.is_human_translation == False,
-                TextEntry.created_at >= now - timedelta(days=7)
-            ).count(),
-            "last_30_days": db.query(TextEntry).filter(
-                TextEntry.is_human_translation == False,
-                TextEntry.created_at >= now - timedelta(days=30)
-            ).count(),
+            "last_24_hours": ai_translations_last_24_hours,
+            "last_7_days": ai_translations_last_7_days,
+            "last_30_days": ai_translations_last_30_days,
         },
-        "top_10_api_keys": db.query(
-            APIKey.name, 
-            func.count(TextEntry.id).label("usage_count")
-        )
-        .join(TextEntry, TextEntry.apikey_requested == APIKey.key)
-        .group_by(APIKey.name)
-        .order_by(func.count(TextEntry.id).desc())
-        .limit(10)
-        .all(),
+        "top_10_api_keys": [(key, count) for key, count in top_10_api_keys]
     }
 
-    # Render the template with real data
-    return templates.TemplateResponse(
-        "admin_dashboard.html",
-        {
-            "request": request,
-            "stats": stats,
-        }
+    
+    return templates.TemplateResponse("admin_dashboard.html", {
+        "request": request,
+        "user": current_user,
+        "stats": stats  # Pass stats to the template
+    })
+
+@app.get("/admin/subscriptions", response_class=HTMLResponse)
+async def admin_subscriptions(
+    request: Request,
+    current_user: User = Depends(get_current_active_admin),
+    db: Session = Depends(get_db)
+):
+    subscriptions = db.query(Subscription).all()
+    return templates.TemplateResponse("admin_subscriptions.html", {
+        "request": request,
+        "subscriptions": subscriptions
+    })
+
+@app.post("/admin/subscriptions")
+async def create_or_update_subscription(
+    id: Optional[int] = Form(None),  # Make `id` optional
+    name: str = Form(...),
+    price: float = Form(...),
+    description: str = Form(None),
+    current_user: User = Depends(get_current_active_admin),
+    db: Session = Depends(get_db)
+):
+    if id:
+        # Update existing subscription
+        subscription = db.query(Subscription).filter(Subscription.id == id).first()
+        if not subscription:
+            raise HTTPException(status_code=404, detail="Subscription not found")
+        subscription.name = name
+        subscription.price = price
+        subscription.description = description
+    else:
+        # Create new subscription
+        subscription = Subscription(name=name, price=price, description=description)
+        db.add(subscription)
+    db.commit()
+    return RedirectResponse(url="/admin/subscriptions", status_code=303)
+
+@app.post("/subscribe/{subscription_id}")
+async def subscribe_to_plan(
+    subscription_id: int,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    subscription = db.query(Subscription).filter(Subscription.id == subscription_id).first()
+    if not subscription:
+        raise HTTPException(status_code=404, detail="Subscription not found")
+    
+    # Create or update user subscription
+    user_subscription = db.query(UserSubscription).filter(
+        UserSubscription.user_id == current_user.id,
+        UserSubscription.subscription_id == subscription_id
+    ).first()
+    if user_subscription:
+        user_subscription.is_active = True
+        user_subscription.start_date = datetime.utcnow()
+        user_subscription.renew_date = datetime.utcnow() + timedelta(days=30)
+    else:
+        user_subscription = UserSubscription(
+            user_id=current_user.id,
+            subscription_id=subscription_id,
+            is_active=True,
+            start_date=datetime.utcnow(),
+            renew_date=datetime.utcnow() + timedelta(days=30)
+        )
+        db.add(user_subscription)
+    db.commit()
+    return {"message": f"Subscribed to {subscription.name} successfully"}
+
+@app.post("/renew/{subscription_id}")
+async def renew_subscription(
+    subscription_id: int,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    user_subscription = db.query(UserSubscription).filter(
+        UserSubscription.user_id == current_user.id,
+        UserSubscription.subscription_id == subscription_id,
+        UserSubscription.is_active == True
+    ).first()
+    if not user_subscription:
+        raise HTTPException(status_code=404, detail="Active subscription not found")
+    
+    # Update the renew date
+    user_subscription.renew_date = user_subscription.renew_date + timedelta(days=30)
+    db.commit()
+    return {"message": f"Subscription renewed successfully. Next renewal date: {user_subscription.renew_date}"}
+
+@app.post("/payment/simulate")
+async def simulate_payment(
+    subscription_id: int,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    subscription = db.query(Subscription).filter(Subscription.id == subscription_id).first()
+    if not subscription:
+        raise HTTPException(status_code=404, detail="Subscription not found")
+    
+    # Simulate payment success
+    return {"message": f"Payment for {subscription.name} (${subscription.price}) successful"}
+
+@app.post("/simulate-payment")
+async def simulate_payment(
+    user_id: int = Form(...),
+    subscription_id: int = Form(...),
+    db: Session = Depends(get_db)
+):
+    # Fetch the subscription
+    subscription = db.query(Subscription).filter(Subscription.id == subscription_id).first()
+    if not subscription:
+        raise HTTPException(status_code=404, detail="Subscription not found")
+    
+    # Create an API key for the user
+    api_key = token_urlsafe(32)
+    db_api_key = APIKey(
+        key=api_key,
+        name=f"Key for user {user_id}",
+        is_active=True,
+        created_at=datetime.utcnow()
     )
+    db.add(db_api_key)
+    db.commit()
+    db.refresh(db_api_key)
+
+    # Update the user's subscription and API key
+    user = db.query(User).filter(User.id == user_id).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+    
+    user.api_key = api_key
+    user.model_permission = subscription.name.upper()  # Save the subscription name as the model permission
+    db.commit()
+
+    # Simulate payment success and create a user subscription
+    user_subscription = UserSubscription(
+        user_id=user_id,
+        subscription_id=subscription_id,
+        is_active=True,
+        start_date=datetime.utcnow(),
+        renew_date=datetime.utcnow() + timedelta(days=30)
+    )
+    db.add(user_subscription)
+    db.commit()
+    
+    return RedirectResponse(url="/my-subscriptions", status_code=303)
+
+@app.get("/my-subscriptions", response_class=HTMLResponse)
+async def my_subscriptions(
+    request: Request,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    if not current_user:
+        return RedirectResponse(url="/login", status_code=303)
+
+    subscriptions = db.query(UserSubscription).filter(
+        UserSubscription.user_id == current_user.id,
+        UserSubscription.is_active == True
+    ).all()
+    return templates.TemplateResponse("my_subscriptions.html", {
+        "request": request,
+        "user": current_user,  # Pass the user object to the template
+        "subscriptions": subscriptions
+    })
 
 @app.exception_handler(HTTPException)
 async def http_exception_handler(request: Request, exc: HTTPException):
@@ -644,6 +950,59 @@ async def admin_keys(
     return templates.TemplateResponse("admin_keys.html", {
         "request": request,
         "api_keys": api_keys
+    })
+
+@app.get("/client/dashboard", response_class=HTMLResponse)
+async def client_dashboard(
+    request: Request,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    logger.info(f"Accessing client dashboard with user: {current_user.username}")
+    
+    # Redirect admin users to the admin dashboard
+    if current_user.is_admin:
+        logger.info(f"User {current_user.username} is an admin. Redirecting to admin dashboard.")
+        return RedirectResponse(url="/admin/dashboard", status_code=303)
+    
+    # Fetch the last 10 human translations
+    human_translations = db.query(TextEntry)\
+        .filter(TextEntry.apikey_requested == current_user.api_key, TextEntry.is_human_translation == True)\
+        .order_by(TextEntry.created_at.desc())\
+        .limit(10)\
+        .all()
+
+    # Fetch the last 10 AI translations
+    ai_translations = db.query(TextEntry)\
+        .filter(TextEntry.apikey_requested == current_user.api_key, TextEntry.is_human_translation == False)\
+        .order_by(TextEntry.created_at.desc())\
+        .limit(10)\
+        .all()
+
+    # Prepare translation data
+    def prepare_translation_data(translations):
+        return [
+            {
+                "id": translation.id,
+                "created_at": translation.created_at,
+                "status": "Completed" if all(
+                    getattr(translation, lang) is not None for lang in ["english", "spanish", "portuguese", "french", "deutch", "italian"]
+                ) else "Pending",
+                "original_text": next(
+                    (getattr(translation, lang) for lang in ["english", "spanish", "portuguese", "french", "deutch", "italian"] if getattr(translation, lang) is not None),
+                    None
+                )
+            }
+            for translation in translations
+        ]
+
+    return templates.TemplateResponse("client_dashboard.html", {
+        "request": request,
+        "user": current_user,
+        "translations": {
+            "human": prepare_translation_data(human_translations),
+            "ai": prepare_translation_data(ai_translations)
+        }
     })
 
 @app.get("/client", response_class=HTMLResponse)
@@ -935,6 +1294,45 @@ async def add_cors_headers(request: Request, call_next):
     response.headers["Expires"] = "0"
     return response
 
+@app.middleware("http")
+async def authenticate_user_middleware(request: Request, call_next):
+    # Skip authentication for login and static routes
+    if request.url.path in ["/", "/login", "/register", "/token", "/select-subscription", "/simulate-payment"] or request.url.path.startswith("/static"):
+        return await call_next(request)
+
+    # Skip authentication for API routes using X-API-Key
+    if request.url.path.startswith("/save-text") or request.headers.get("X-API-Key"):
+        return await call_next(request)
+
+    # Get token from header or cookie
+    token = None
+    auth_cookie = request.cookies.get('access_token')
+    if auth_cookie and auth_cookie.startswith('Bearer '):
+        token = auth_cookie.split(' ')[1]
+        logger.info(f"Token found in cookie: {token}")
+    else:
+        logger.info("No token found. Redirecting to login.")
+        return RedirectResponse(url="/login", status_code=303)
+
+    try:
+        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+        username = payload.get("sub")
+        logger.info(f"Decoded token payload: {payload}")
+        if username:
+            db = SessionLocal()
+            try:
+                user = db.query(User).filter(User.username == username).first()
+                if user and user.is_active:
+                    request.state.user = user
+                    response = await call_next(request)
+                    return response
+            finally:
+                db.close()
+    except JWTError as e:
+        logger.error(f"JWT decoding error: {str(e)}")
+
+    return RedirectResponse(url="/login", status_code=303)
+
 @app.get("/admin/users", response_class=HTMLResponse)
 async def admin_users_page(
     request: Request,
@@ -1177,60 +1575,6 @@ async def request_password_reset(
     
     return {"message": f"Password reset token generated: {reset_token}"}
 
-@app.middleware("http")
-async def authenticate_user_middleware(request: Request, call_next):
-    # Skip authentication for login and static routes
-    if request.url.path in ["/login", "/token"] or request.url.path.startswith("/static"):
-        return await call_next(request)
-
-    # Get token from header or cookie
-    token = None
-    auth_header = request.headers.get('Authorization')
-    if auth_header and auth_header.startswith('Bearer '):
-        token = auth_header.split(' ')[1]
-    else:
-        auth_cookie = request.cookies.get('access_token')
-        if auth_cookie and auth_cookie.startswith('Bearer '):
-            token = auth_cookie.split(' ')[1]
-
-    if not token:
-        if request.url.path.startswith("/admin"):
-            return RedirectResponse(url="/login", status_code=303)
-        return await call_next(request)
-
-    try:
-        # Verify token and get user
-        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
-        username = payload.get("sub")
-        if username:
-            db = SessionLocal()
-            try:
-                user = db.query(User).filter(User.username == username).first()
-                if user and user.is_active:
-                    # Attach user to request state
-                    request.state.user = user
-                    response = await call_next(request)
-                    
-                    # Refresh token in cookie
-                    response.set_cookie(
-                        key="access_token",
-                        value=f"Bearer {token}",
-                        httponly=True,
-                        secure=True,
-                        samesite="lax",
-                        max_age=1800  # 30 minutes
-                    )
-                    return response
-            finally:
-                db.close()
-
-    except JWTError:
-        pass
-
-    if request.url.path.startswith("/admin"):
-        return RedirectResponse(url="/login", status_code=303)
-    return await call_next(request)
-
 # @app.on_event("startup")
 # async def alter_table():
 #     engine = create_engine(DATABASE_URL)
@@ -1243,6 +1587,13 @@ async def authenticate_user_middleware(request: Request, call_next):
 #             connection.commit()
 #         except Exception as e:
 #             print(f"Migration error: {str(e)}")
+
+# Add renew_date column
+# def upgrade():
+#     op.add_column('user_subscriptions', sa.Column('renew_date', sa.DateTime(), nullable=True))
+
+# def downgrade():
+#     op.drop_column('user_subscriptions', 'renew_date')
 
 if __name__ == '__main__':
     uvicorn.run('main:app', host='0.0.0.0', port=8000)

@@ -1,0 +1,33 @@
+{% extends "base.html" %}
+
+{% block title %}Subscriptions{% endblock %}
+
+{% block content %}
+<div class="subscriptions">
+    <h1>Available Subscriptions</h1>
+    <table>
+        <thead>
+            <tr>
+                <th>Name</th>
+                <th>Price</th>
+                <th>Description</th>
+                <th>Actions</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for subscription in subscriptions %}
+            <tr>
+                <td>{{ subscription.name }}</td>
+                <td>${{ subscription.price }}</td>
+                <td>{{ subscription.description }}</td>
+                <td>
+                    <form method="POST" action="/subscribe/{{ subscription.id }}">
+                        <button type="submit">Subscribe</button>
+                    </form>
+                </td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+</body>
+{% endblock %}

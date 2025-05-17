@@ -1,0 +1,85 @@
+{% extends "base.html" %}
+
+{% block title %}Subscriptions Management{% endblock %}
+
+{% block content %}
+<body class="admin-subscriptions">
+    <h1>Subscriptions Management</h1>
+
+    <!-- Create/Update Subscription Form -->
+    <form method="POST" action="/admin/subscriptions" class="create-subscription-form">
+        <input type="hidden" name="id" id="subscription-id">
+        <label for="name">Name:</label>
+        <input type="text" id="name" name="name" required>
+        <label for="price">Price:</label>
+        <input type="number" id="price" name="price" step="0.01" required>
+        <label for="description">Description:</label>
+        <textarea id="description" name="description"></textarea>
+        <button type="submit" onclick="clearIdIfNew()">Save</button>
+    </form>
+
+    <!-- Subscriptions List -->
+    <h2>Existing Subscriptions</h2>
+    <table>
+        <thead>
+            <tr>
+                <th>ID</th>
+                <th>Name</th>
+                <th>Price</th>
+                <th>Description</th>
+                <th>Actions</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for subscription in subscriptions %}
+            <tr>
+                <td>{{ subscription.id }}</td>
+                <td>{{ subscription.name }}</td>
+                <td>${{ subscription.price }}</td>
+                <td>{{ subscription.description }}</td>
+                <td>
+                    <button 
+                        class="edit-button" 
+                        data-id="{{ subscription.id }}" 
+                        data-name="{{ subscription.name|escapejs }}" 
+                        data-price="{{ subscription.price }}" 
+                        data-description="{{ subscription.description|escapejs }}">
+                        Edit
+                    </button>
+                </td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+</body>
+
+<script>
+    function editSubscription(id, name, price, description) {
+        document.getElementById('subscription-id').value = id;
+        document.getElementById('name').value = name;
+        document.getElementById('price').value = price;
+        document.getElementById('description').value = description;
+    }
+
+    document.querySelectorAll('.edit-button').forEach(button => {
+        button.addEventListener('click', function () {
+            const id = this.getAttribute('data-id');
+            const name = this.getAttribute('data-name');
+            const price = this.getAttribute('data-price');
+            const description = this.getAttribute('data-description');
+
+            document.getElementById('subscription-id').value = id;
+            document.getElementById('name').value = name;
+            document.getElementById('price').value = price;
+            document.getElementById('description').value = description;
+        });
+    });
+
+    function clearIdIfNew() {
+        const idField = document.getElementById('subscription-id');
+        if (!idField.value) {
+            idField.removeAttribute('name'); // Prevent sending an empty `id` field
+        }
+    }
+</script>
+{% endblock %}
