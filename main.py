@@ -87,6 +87,8 @@ class Translation(Base):
     text_entry_id = Column(Integer, ForeignKey("text_entries.id"), nullable=False)
     language = Column(String, nullable=False)  # Language code (e.g., "english", "spanish")
     translated_text = Column(String, nullable=False)
+    style = Column(String, nullable=True)  # Translation style (e.g., "Funny", "Executive")
+    model_version = Column(String, nullable=False)  # ChatGPT model version used
 
     # Relationship to text entry
     text_entry = relationship("TextEntry", back_populates="translations")
@@ -318,6 +320,7 @@ async def translate_text(
     
     # Translate the text
     translations = {}
+    model_version = "gpt-3.5-turbo"  # Specify the model version used
     try:
         for target_lang in target_languages:
             # Build the translation prompt
@@ -325,7 +328,7 @@ async def translate_text(
             prompt = f"Translate this text from {source_language.value} to {target_lang.value}{style_prompt}:\n{text}"
             
             response = openai.ChatCompletion.create(
-                model="gpt-3.5-turbo",
+                model=model_version,
                 messages=[
                     {"role": "system", "content": "You are a professional translator."},
                     {"role": "user", "content": prompt}
@@ -340,13 +343,22 @@ async def translate_text(
             apikey_requested=api_key,
             is_human_translation=False
         )
-        setattr(db_text, source_language.value, text)
-        for lang, translated_text in translations.items():
-            setattr(db_text, lang, translated_text)
-        
         db.add(db_text)
         db.commit()
         db.refresh(db_text)
+
+        # Insert translations into the translations table
+        for lang, translated_text in translations.items():
+            db_translation = Translation(
+                text_entry_id=db_text.id,
+                language=lang,
+                translated_text=translated_text,
+                style=translation_style,  # Save the translation style
+                model_version=model_version  # Save the model version
+            )
+            db.add(db_translation)
+        
+        db.commit()
         
         return {
             "message": "Text translated successfully",
