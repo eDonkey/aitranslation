@@ -320,7 +320,7 @@ async def translate_text(
     
     # Translate the text
     translations = {}
-    model_version = "gpt-3.5-turbo"  # Specify the model version used
+    model_version = "gpt-4-turbo"  # Updated model version
     try:
         for target_lang in target_languages:
             # Build the translation prompt
