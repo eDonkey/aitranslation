@@ -71,16 +71,26 @@ class TextEntry(Base):
     __tablename__ = "text_entries"
 
     id = Column(Integer, primary_key=True, index=True)
-    english = Column(String)
-    spanish = Column(String)
-    portuguese = Column(String)
-    french = Column(String)
-    deutch = Column(String)
-    italian = Column(String)
     apikey_requested = Column(String)
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, nullable=True)
     is_human_translation = Column(Boolean, default=False)
+
+    # Relationship to translations
+    translations = relationship("Translation", back_populates="text_entry")
+
+
+class Translation(Base):
+    __tablename__ = "translations"
+
+    id = Column(Integer, primary_key=True, index=True)
+    text_entry_id = Column(Integer, ForeignKey("text_entries.id"), nullable=False)
+    language = Column(String, nullable=False)  # Language code (e.g., "english", "spanish")
+    translated_text = Column(String, nullable=False)
+
+    # Relationship to text entry
+    text_entry = relationship("TextEntry", back_populates="translations")
+
 
 class APIKey(Base):
     __tablename__ = "api_keys"
