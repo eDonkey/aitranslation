@@ -267,73 +267,54 @@ async def get_texts(
 @app.post("/translate-text/")
 async def translate_text(
     text: str = Form(...),
-    language: Language = Form(...),
+    source_language: Language = Form(...),
+    target_languages: List[Language] = Form(None),  # Optional list of target languages
+    translation_style: str = Form(None),  # Optional translation style
     db: Session = Depends(get_db),
     api_key: str = Header(..., alias="X-API-Key")
 ):
-    try:
-        # Check if this is a trial request
-        if api_key == 'trial-key':
-            # For trial requests, just do the translation without DB storage
-            translations = {}
-            all_languages = [lang for lang in Language]
-            
-            # Translate to all languages except the source language
-            for target_lang in all_languages:
-                if target_lang == language:
-                    continue
-                    
-                prompt = f"Translate this text from {language} to {target_lang}:\n{text}"
-                
-                response = openai.chat.completions.create(
-                    model="gpt-3.5-turbo",
-                    messages=[
-                        {"role": "system", "content": "You are a professional translator."},
-                        {"role": "user", "content": prompt}
-                    ]
-                )
-                
-                translated_text = response.choices[0].message.content
-                translations[target_lang] = translated_text
-            
-            return {
-                "original_text": text,
-                "original_language": language,
-                "translations": translations
-            }
-        
-        # For authenticated requests, continue with the existing logic
-        db_key = db.query(APIKey).filter(
-            APIKey.key == api_key,
-            APIKey.is_active == True
-        ).first()
-        
-        if not db_key:
-            raise HTTPException(
-                status_code=401,
-                detail="Invalid API Key"
-            )
-        
-        # Create new text entry
-        db_text = TextEntry(
-            apikey_requested=api_key
+    # Validate the API key
+    db_key = db.query(APIKey).filter(
+        APIKey.key == api_key,
+        APIKey.is_active == True
+    ).first()
+    
+    if not db_key:
+        raise HTTPException(
+            status_code=401,
+            detail="Invalid API Key"
         )
-        
-        # Set original text
-        setattr(db_text, language, text)
-        
-        # Get all available languages from the Language enum
-        all_languages = [lang for lang in Language]
-        translations = {}
-        
-        # Translate to all languages except the source language
-        for target_lang in all_languages:
-            if target_lang == language:
-                continue
-                
-            prompt = f"Translate this text from {language} to {target_lang}:\n{text}"
+    
+    # Get the user associated with the API key
+    user = db.query(User).filter(User.api_key == api_key).first()
+    if not user:
+        raise HTTPException(
+            status_code=401,
+            detail="User not found for the provided API Key"
+        )
+    
+    # Validate target languages
+    all_languages = [lang for lang in Language]
+    if target_languages:
+        for lang in target_languages:
+            if lang not in all_languages:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Invalid target language: {lang}. Allowed languages are: {[l.value for l in all_languages]}"
+                )
+    else:
+        # If no target languages are provided, translate to all languages except the source language
+        target_languages = [lang for lang in all_languages if lang != source_language]
+    
+    # Translate the text
+    translations = {}
+    try:
+        for target_lang in target_languages:
+            # Build the translation prompt
+            style_prompt = f" in a {translation_style} style" if translation_style else ""
+            prompt = f"Translate this text from {source_language.value} to {target_lang.value}{style_prompt}:\n{text}"
             
-            response = openai.chat.completions.create(
+            response = openai.ChatCompletion.create(
                 model="gpt-3.5-turbo",
                 messages=[
                     {"role": "system", "content": "You are a professional translator."},
@@ -341,26 +322,30 @@ async def translate_text(
                 ]
             )
             
-            translated_text = response.choices[0].message.content
-            
-            # Save translation to database entry
-            setattr(db_text, target_lang, translated_text)
-            
-            # Store translation in response dictionary
-            translations[target_lang] = translated_text
+            translated_text = response['choices'][0]['message']['content']
+            translations[target_lang.value] = translated_text
         
-        # Save to database
+        # Save the translations in the database
+        db_text = TextEntry(
+            apikey_requested=api_key,
+            is_human_translation=False
+        )
+        setattr(db_text, source_language.value, text)
+        for lang, translated_text in translations.items():
+            setattr(db_text, lang, translated_text)
+        
         db.add(db_text)
         db.commit()
         db.refresh(db_text)
         
         return {
+            "message": "Text translated successfully",
+            "id": db_text.id,
             "original_text": text,
-            "original_language": language,
-            "translations": translations,
-            "id": db_text.id
+            "original_language": source_language.value,
+            "translations": translations
         }
-            
+    
     except Exception as e:
         raise HTTPException(
             status_code=500,
