@@ -64,6 +64,7 @@ class Language(str, Enum):
     FRENCH = "french"
     DEUTCH = "deutch"
     ITALIAN = "italian"
+    FILIPINO = "filipino"
 
 # Database Model
 class TextEntry(Base):
