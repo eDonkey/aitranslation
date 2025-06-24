@@ -5,7 +5,7 @@ from fastapi.templating import Jinja2Templates
 from sqlalchemy import create_engine, Column, Integer, String, Text, TIMESTAMP, text, Boolean, DateTime, func, Float, ForeignKey, desc
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker, Session, relationship
-from typing import Optional, List
+from typing import Optional, List, Union
 from datetime import datetime, timedelta
 from pydantic import BaseModel
 from enum import Enum
@@ -25,6 +25,14 @@ from jinja2 import Environment
 from markupsafe import escape
 from alembic import op
 import sqlalchemy as sa
+import io
+import csv
+from fastapi import File, UploadFile
+from fastapi.responses import StreamingResponse
+from starlette.middleware.base import BaseHTTPMiddleware
+from starlette.requests import Request
+from starlette.responses import Response
+import asyncio
 
 logger = logging.getLogger("uvicorn.error")
 
@@ -65,6 +73,7 @@ class Language(str, Enum):
     DEUTCH = "deutch"
     ITALIAN = "italian"
     FILIPINO = "filipino"
+    JAPANESE = "japanese"
 
 # Database Model
 class TextEntry(Base):
@@ -367,6 +376,120 @@ async def translate_text(
             "original_language": source_language.value,
             "translations": translations
         }
+    
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Translation failed: {str(e)}"
+        )
+
+@app.post("/translate-csv/")
+async def translate_csv(
+    file: bytes = File(...),  # CSV file upload
+    source_language: Language = Form(...),
+    target_languages: Union[List[Language], str] = Form(...),  # Accept list or comma-separated string
+    translation_style: str = Form(None),  # Optional translation style
+    db: Session = Depends(get_db),
+    api_key: str = Header(..., alias="X-API-Key")
+):
+    # If target_languages is a string, split it into a list
+    if isinstance(target_languages, str):
+        target_languages = [lang.strip() for lang in target_languages.split(",")]
+
+    # Validate target languages
+    all_languages = [lang for lang in Language]
+    for lang in target_languages:
+        if lang not in all_languages:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Invalid target language: {lang}. Allowed languages are: {[l.value for l in all_languages]}"
+            )
+    
+    # Proceed with the rest of the logic...
+    # Read the CSV file
+    try:
+        input_csv = io.StringIO(file.decode("utf-8"))
+        reader = csv.reader(input_csv)
+        rows = list(reader)
+    except Exception as e:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Failed to read the CSV file: {str(e)}"
+        )
+    
+    if not rows or len(rows) < 1:
+        raise HTTPException(
+            status_code=400,
+            detail="The uploaded CSV file is empty or invalid."
+        )
+    
+    # The first column contains the texts to be translated
+    try:
+        texts = [row[0] for row in rows if row]  # Extract the first column
+    except Exception as e:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Failed to extract texts from the CSV file: {str(e)}"
+        )
+    
+    translations = {lang.value: [] for lang in target_languages}
+    model_version = "gpt-4-turbo"  # Specify the model version used
+
+    try:
+        for target_lang in target_languages:
+            # Build a single prompt for all texts in the batch
+            style_prompt = f" in a {translation_style} style" if translation_style else ""
+            prompt = f"Translate the following texts from {source_language.value} to {target_lang.value}{style_prompt}. Only return the translations, one per line, without any additional commentary:\n"
+            prompt += "\n".join([f"- {text}" for text in texts])
+            
+            # Send a single API call for the batch
+            response = openai.ChatCompletion.create(
+                model=model_version,
+                messages=[
+                    {"role": "system", "content": "You are a professional translator."},
+                    {"role": "user", "content": prompt}
+                ]
+            )
+            
+            # Parse the response into individual translations
+            translated_texts = response['choices'][0]['message']['content'].split("\n")
+            parsed_translations = [text.strip("- ").strip() for text in translated_texts if text.strip()]
+            
+            # Debugging: Log the parsed translations
+            print(f"DEBUG: Parsed translations for {target_lang.value}: {parsed_translations}")
+            
+            # Ensure the number of translations matches the number of input texts
+            if len(parsed_translations) != len(texts):
+                print(f"WARNING: Mismatch between input texts and translations for language '{target_lang.value}'.")
+                # Fill missing translations with a placeholder
+                while len(parsed_translations) < len(texts):
+                    parsed_translations.append("Translation missing")
+                # Trim extra translations if there are too many
+                parsed_translations = parsed_translations[:len(texts)]
+            
+            translations[target_lang.value] = parsed_translations
+        
+        # Write translations to the CSV
+        output_csv = io.StringIO()
+        writer = csv.writer(output_csv)
+        
+        # Write the header row
+        header = ["Original"] + [lang.value for lang in target_languages]
+        writer.writerow(header)
+        
+        # Write the original texts and their translations
+        for i, text in enumerate(texts):
+            row = [text] + [translations[lang.value][i] for lang in target_languages]
+            writer.writerow(row)
+        
+        output_csv.seek(0)
+        
+        # Return the updated CSV file
+        return StreamingResponse(
+            output_csv,
+            media_type="text/csv",
+            headers={"Content-Disposition": "attachment; filename=translated.csv"}
+        )
     
     except Exception as e:
         raise HTTPException(
@@ -1603,5 +1726,19 @@ async def request_password_reset(
 # def downgrade():
 #     op.drop_column('user_subscriptions', 'renew_date')
 
+class TimeoutMiddleware(BaseHTTPMiddleware):
+    def __init__(self, app, timeout: int):
+        super().__init__(app)
+        self.timeout = timeout
+
+    async def dispatch(self, request: Request, call_next):
+        try:
+            return await asyncio.wait_for(call_next(request), timeout=self.timeout)
+        except asyncio.TimeoutError:
+            return Response("Request timed out", status_code=504)
+
+# Add the middleware to your FastAPI app
+app.add_middleware(TimeoutMiddleware, timeout=120)  # Set timeout to 120 seconds
+
 if __name__ == '__main__':
-    uvicorn.run('main:app', host='0.0.0.0', port=8000)
+    uvicorn.run('main:app', host='0.0.0.0', port=8000, timeout_keep_alive=120)
