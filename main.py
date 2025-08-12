@@ -819,23 +819,48 @@ async def get_statistics(
 async def get_user_statistics(
     user_id: int,
     period: BillingPeriod = Query(BillingPeriod.MONTHLY),
-    start_date: Optional[str] = Query(None),
-    end_date: Optional[str] = Query(None),
+    start_date: Optional[str] = Query(None, description="Start date in YYYY-MM-DD format. If provided, period will be calculated from this date."),
+    end_date: Optional[str] = Query(None, description="End date in YYYY-MM-DD format. Only used when start_date is provided."),
     db: Session = Depends(get_db),
     master_key: str = Depends(validate_master_key)
 ):
     """
-    Get detailed statistics for a specific user with billing analysis
+    Get detailed statistics for a specific user with billing analysis.
+    
+    Period calculation:
+    - If start_date is provided:
+      * If end_date is also provided: Uses exact date range
+      * If only start_date: Calculates end_date based on period (monthly: +1 month, quarterly: +3 months, annually: +1 year)
+    - If no start_date: Uses current date and goes backwards based on period
     """
     user = db.query(User).filter(User.id == user_id).first()
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
     
-    # Calculate date range based on period
-    if start_date and end_date:
-        period_start = datetime.strptime(start_date, "%Y-%m-%d")
-        period_end = datetime.strptime(end_date, "%Y-%m-%d")
+    # Calculate date range based on period and provided dates
+    if start_date:
+        try:
+            period_start = datetime.strptime(start_date, "%Y-%m-%d")
+            
+            if end_date:
+                # Use exact date range if both dates provided
+                period_end = datetime.strptime(end_date, "%Y-%m-%d")
+            else:
+                # Calculate end date based on period from start date
+                if period == BillingPeriod.MONTHLY:
+                    period_end = period_start + relativedelta(months=1)
+                elif period == BillingPeriod.QUARTERLY:
+                    period_end = period_start + relativedelta(months=3)
+                else:  # ANNUALLY
+                    period_end = period_start + relativedelta(years=1)
+                    
+        except ValueError:
+            raise HTTPException(
+                status_code=400, 
+                detail="Invalid date format. Use YYYY-MM-DD format."
+            )
     else:
+        # Default behavior: go backwards from current date
         period_end = datetime.utcnow()
         if period == BillingPeriod.MONTHLY:
             period_start = period_end - relativedelta(months=1)
@@ -843,6 +868,13 @@ async def get_user_statistics(
             period_start = period_end - relativedelta(months=3)
         else:  # ANNUALLY
             period_start = period_end - relativedelta(years=1)
+    
+    # Ensure period_start is not after period_end
+    if period_start > period_end:
+        raise HTTPException(
+            status_code=400,
+            detail="Start date cannot be after end date"
+        )
     
     # Get text translation statistics
     text_stats = db.query(
@@ -927,6 +959,9 @@ async def get_user_statistics(
     peak_day_usage = max(daily_usage.values()) if daily_usage else 0
     avg_daily_usage = sum(daily_usage.values()) / len(daily_usage) if daily_usage else 0
     
+    # Calculate the actual period length in days
+    actual_period_days = (period_end - period_start).days
+    
     # Prepare statistics data
     statistics = {
         "user_id": user_id,
@@ -935,6 +970,8 @@ async def get_user_statistics(
         "period": period.value,
         "period_start": period_start.isoformat(),
         "period_end": period_end.isoformat(),
+        "actual_period_days": actual_period_days,
+        "period_calculation_method": "custom_dates" if start_date else "backwards_from_now",
         "text_translations": {
             "total_translations": text_stats.total_translations or 0,
             "total_characters": total_characters_translated,
@@ -973,14 +1010,49 @@ async def get_user_statistics(
 @app.get("/api/admin/billing-analysis")
 async def get_billing_analysis_all_users(
     period: BillingPeriod = Query(BillingPeriod.MONTHLY),
-    start_date: Optional[str] = Query(None),
-    end_date: Optional[str] = Query(None),
+    start_date: Optional[str] = Query(None, description="Start date in YYYY-MM-DD format. If provided, period will be calculated from this date."),
+    end_date: Optional[str] = Query(None, description="End date in YYYY-MM-DD format. Only used when start_date is provided."),
     db: Session = Depends(get_db),
     master_key: str = Depends(validate_master_key)
 ):
     """
-    Get billing analysis for all users
+    Get billing analysis for all users with flexible date range options
     """
+    # Calculate date range (same logic as user statistics)
+    if start_date:
+        try:
+            period_start = datetime.strptime(start_date, "%Y-%m-%d")
+            
+            if end_date:
+                period_end = datetime.strptime(end_date, "%Y-%m-%d")
+            else:
+                if period == BillingPeriod.MONTHLY:
+                    period_end = period_start + relativedelta(months=1)
+                elif period == BillingPeriod.QUARTERLY:
+                    period_end = period_start + relativedelta(months=3)
+                else:  # ANNUALLY
+                    period_end = period_start + relativedelta(years=1)
+                    
+        except ValueError:
+            raise HTTPException(
+                status_code=400, 
+                detail="Invalid date format. Use YYYY-MM-DD format."
+            )
+    else:
+        period_end = datetime.utcnow()
+        if period == BillingPeriod.MONTHLY:
+            period_start = period_end - relativedelta(months=1)
+        elif period == BillingPeriod.QUARTERLY:
+            period_start = period_end - relativedelta(months=3)
+        else:  # ANNUALLY
+            period_start = period_end - relativedelta(years=1)
+    
+    if period_start > period_end:
+        raise HTTPException(
+            status_code=400,
+            detail="Start date cannot be after end date"
+        )
+    
     users = db.query(User).filter(User.is_active == True).all()
     
     billing_summary = []
@@ -988,23 +1060,54 @@ async def get_billing_analysis_all_users(
     
     for user in users:
         try:
-            # Get statistics for each user
-            user_stats_response = await get_user_statistics(
-                user.id, period, start_date, end_date, db, master_key
-            )
+            # Get text translation statistics
+            text_stats = db.query(
+                func.count(TextEntry.id).label('total_translations')
+            ).filter(
+                TextEntry.apikey_requested == user.api_key,
+                TextEntry.created_at >= period_start,
+                TextEntry.created_at <= period_end
+            ).first()
+            
+            # Get CSV translation statistics
+            csv_stats = db.query(
+                func.count(TranslationRequest.id).label('total_csv_translations'),
+                func.sum(TranslationRequest.cost).label('total_cost')
+            ).filter(
+                TranslationRequest.apikey_requested == user.api_key,
+                TranslationRequest.created_at >= period_start,
+                TranslationRequest.created_at <= period_end
+            ).first()
+            
+            total_api_calls = (text_stats.total_translations or 0) + (csv_stats.total_csv_translations or 0)
+            total_openai_cost = float(csv_stats.total_cost or 0)
+            
+            # Simple billing calculation for summary
+            if total_api_calls < 50:
+                usage_tier = "light"
+                suggested_charge = max(total_openai_cost * 1.5, 5.0)
+            elif total_api_calls < 200:
+                usage_tier = "moderate" 
+                suggested_charge = max(total_openai_cost * 1.4, 15.0)
+            elif total_api_calls < 1000:
+                usage_tier = "heavy"
+                suggested_charge = total_openai_cost * 1.3
+            else:
+                usage_tier = "enterprise"
+                suggested_charge = total_openai_cost * 1.2
             
             billing_summary.append({
                 "user_id": user.id,
                 "username": user.username,
                 "email": user.email,
-                "suggested_charge": user_stats_response["billing_analysis"]["suggested_monthly_charge"],
-                "usage_tier": user_stats_response["billing_analysis"]["usage_tier"],
-                "total_api_calls": user_stats_response["totals"]["total_api_calls"],
-                "openai_costs": user_stats_response["totals"]["total_openai_cost"]
+                "suggested_charge": round(suggested_charge, 2),
+                "usage_tier": usage_tier,
+                "total_api_calls": total_api_calls,
+                "openai_costs": total_openai_cost
             })
             
-            total_revenue_potential += user_stats_response["billing_analysis"]["suggested_monthly_charge"]
-            
+            total_revenue_potential += suggested_charge
+                
         except Exception as e:
             print(f"Error processing user {user.id}: {str(e)}")
             continue
@@ -1012,8 +1115,14 @@ async def get_billing_analysis_all_users(
     # Sort by suggested charge (highest first)
     billing_summary.sort(key=lambda x: x["suggested_charge"], reverse=True)
     
+    actual_period_days = (period_end - period_start).days
+    
     return {
         "period": period.value,
+        "period_start": period_start.isoformat(),
+        "period_end": period_end.isoformat(),
+        "actual_period_days": actual_period_days,
+        "period_calculation_method": "custom_dates" if start_date else "backwards_from_now",
         "total_users_analyzed": len(billing_summary),
         "total_revenue_potential": round(total_revenue_potential, 2),
         "avg_revenue_per_user": round(total_revenue_potential / len(billing_summary), 2) if billing_summary else 0,
