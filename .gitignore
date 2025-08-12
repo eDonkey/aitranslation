@@ -10,3 +10,5 @@
 *.db-journal
 *.db-lock
 *.db-trace
+postman.json
+clean.sh

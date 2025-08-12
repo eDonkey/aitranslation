@@ -3,10 +3,11 @@ from fastapi.responses import HTMLResponse, FileResponse, RedirectResponse, JSON
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from sqlalchemy import create_engine, Column, Integer, String, Text, TIMESTAMP, text, Boolean, DateTime, func, Float, ForeignKey, desc, LargeBinary
-from sqlalchemy.ext.declarative import declarative_base
-from sqlalchemy.orm import sessionmaker, Session, relationship, declarative_base  # Updated import
+from sqlalchemy.orm import sessionmaker, Session, relationship, declarative_base
 from typing import Optional, List, Union
 from datetime import datetime, timedelta
+from dateutil.relativedelta import relativedelta
+import calendar
 from pydantic import BaseModel
 from enum import Enum
 import uvicorn
@@ -15,23 +16,11 @@ from dotenv import load_dotenv
 import openai
 from secrets import token_urlsafe
 from fastapi.middleware.cors import CORSMiddleware
-from passlib.context import CryptContext
-from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
-from jose import JWTError, jwt
-from starlette.status import HTTP_303_SEE_OTHER, HTTP_307_TEMPORARY_REDIRECT
-import bcrypt
 import logging
-from jinja2 import Environment
-from markupsafe import escape
-from alembic import op
-import sqlalchemy as sa
 import io
 import csv
 from fastapi import File, UploadFile
 from fastapi.responses import StreamingResponse
-from starlette.middleware.base import BaseHTTPMiddleware
-from starlette.requests import Request
-from starlette.responses import Response
 import asyncio
 
 logger = logging.getLogger("uvicorn.error")
@@ -62,7 +51,8 @@ engine = create_engine(DATABASE_URL)
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 Base = declarative_base()
 
-#VALID_API_KEYS = os.getenv("API_KEYS", "your-api-key-1,your-api-key-2").split(",")
+# Master API Key for administration
+MASTER_API_KEY = os.getenv("MASTER_API_KEY", "master-key-change-this")
 
 # Define valid languages
 class Language(str, Enum):
@@ -76,7 +66,7 @@ class Language(str, Enum):
     JAPANESE = "japanese"
     VIETNAMESE = "vietnamese"
 
-# Database Model
+# Database Models
 class TextEntry(Base):
     __tablename__ = "text_entries"
 
@@ -89,36 +79,29 @@ class TextEntry(Base):
     # Relationship to translations
     translations = relationship("Translation", back_populates="text_entry")
 
-
 class Translation(Base):
     __tablename__ = "translations"
 
     id = Column(Integer, primary_key=True, index=True)
     text_entry_id = Column(Integer, ForeignKey("text_entries.id"), nullable=False)
-    language = Column(String, nullable=False)  # Language code (e.g., "english", "spanish")
+    language = Column(String, nullable=False)
     translated_text = Column(String, nullable=False)
-    style = Column(String, nullable=True)  # Translation style (e.g., "Funny", "Executive")
-    model_version = Column(String, nullable=False)  # ChatGPT model version used
+    style = Column(String, nullable=True)
+    model_version = Column(String, nullable=False)
 
     # Relationship to text entry
     text_entry = relationship("TextEntry", back_populates="translations")
-
 
 class APIKey(Base):
     __tablename__ = "api_keys"
 
     id = Column(Integer, primary_key=True, index=True)
     key = Column(String, unique=True, index=True, nullable=False)
-    name = Column(String, nullable=False)  # A description/name for the key
+    name = Column(String, nullable=False)
     created_at = Column(TIMESTAMP, nullable=False, server_default=text('CURRENT_TIMESTAMP'))
     last_used = Column(TIMESTAMP, nullable=True)
     is_active = Column(Boolean, default=True)
-
-class ModelPermission(str, Enum):
-    AI_ONLY = "AI ONLY"
-    HUMAN_ONLY = "HUMAN ONLY"
-    BOTH = "BOTH"
-    NONE = "NONE"
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=True)
 
 class User(Base):
     __tablename__ = "users"
@@ -126,35 +109,9 @@ class User(Base):
     id = Column(Integer, primary_key=True, index=True)
     username = Column(String, unique=True, index=True)
     email = Column(String, unique=True, index=True)
-    hashed_password = Column(String)
     is_active = Column(Boolean, default=True)
-    is_admin = Column(Boolean, default=False)
-    model_permission = Column(String, default=ModelPermission.NONE)
     created_at = Column(DateTime, default=datetime.utcnow)
     api_key = Column(String, unique=True, nullable=True)
-    subscriptions = relationship("UserSubscription", back_populates="user")
-
-class Subscription(Base):
-    __tablename__ = "subscriptions"
-
-    id = Column(Integer, primary_key=True, index=True)
-    name = Column(String, unique=True, nullable=False)  # AI ONLY, HUMAN ONLY, FULL PACKAGE
-    price = Column(Float, nullable=False)  # Price of the subscription
-    description = Column(String, nullable=True)  # Optional description
-    created_at = Column(DateTime, default=datetime.utcnow)
-
-class UserSubscription(Base):
-    __tablename__ = "user_subscriptions"
-
-    id = Column(Integer, primary_key=True, index=True)
-    user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
-    subscription_id = Column(Integer, ForeignKey("subscriptions.id"), nullable=False)
-    is_active = Column(Boolean, default=True)
-    start_date = Column(DateTime, default=datetime.utcnow)
-    renew_date = Column(DateTime, nullable=True)  # Next renewal date
-    end_date = Column(DateTime, nullable=True)  # Optional for expiration
-    user = relationship("User", back_populates="subscriptions")
-    subscription = relationship("Subscription")
 
 class TranslationRequest(Base):
     __tablename__ = "translation_requests"
@@ -165,7 +122,8 @@ class TranslationRequest(Base):
     translation_style = Column(String, nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow)
     csv_file = Column(LargeBinary, nullable=False)  # Store the CSV as binary data
-    cost = Column(Float, nullable=False, default=0.0)  # Cost of the GPT API call
+    cost = Column(Float, nullable=False, default=0.0)
+    apikey_requested = Column(String, nullable=False)  # Added for user association
 
 # Create tables
 Base.metadata.create_all(bind=engine)
@@ -179,7 +137,7 @@ def get_db():
         db.close()
 
 # API Key validation
-def validate_api_key(x_api_key: str = Header(...)):
+def validate_api_key(x_api_key: str = Header(..., alias="X-API-Key")):
     db = SessionLocal()
     try:
         db_key = db.query(APIKey).filter(
@@ -201,131 +159,66 @@ def validate_api_key(x_api_key: str = Header(...)):
     finally:
         db.close()
 
-# Request model
+# Master API Key validation
+def validate_master_key(x_api_key: str = Header(..., alias="X-API-Key")):
+    if x_api_key != MASTER_API_KEY:
+        raise HTTPException(
+            status_code=401,
+            detail="Invalid Master API Key"
+        )
+    return x_api_key
+
+# Pydantic models
 class TextRequest(BaseModel):
     text: str
     language: Language
 
-@app.post("/save-text/")
-async def save_text(
-    request: TextRequest,
-    db: Session = Depends(get_db),
-    api_key: str = Depends(validate_api_key)
-):
-    # Validate the API key
-    db_key = db.query(APIKey).filter(
-        APIKey.key == api_key,
-        APIKey.is_active == True
-    ).first()
-    
-    if not db_key:
-        raise HTTPException(
-            status_code=401,
-            detail="Invalid API Key"
-        )
-    
-    # Get the user associated with the API key
-    user = db.query(User).filter(User.api_key == api_key).first()
-    if not user:
-        raise HTTPException(
-            status_code=401,
-            detail="User not found for the provided API Key"
-        )
-    
-    # Check the user's model permission
-    if user.model_permission == ModelPermission.HUMAN_ONLY:
-        # Save the text entry for manual translation
-        db_text = TextEntry(
-            english=None,
-            spanish=None,
-            portuguese=None,
-            french=None,
-            deutch=None,
-            italian=None,
-            apikey_requested=api_key,
-            is_human_translation=True
-        )
-        setattr(db_text, request.language.value, request.text)
-        
-        db.add(db_text)
-        db.commit()
-        db.refresh(db_text)
-        
-        return {
-            "message": f"Text saved for manual translation in {request.language.value}",
-            "id": db_text.id
-        }
-    
-    elif user.model_permission == ModelPermission.AI_ONLY:
-        # Forward the request to the /translate-text endpoint
-        try:
-            response = await translate_text(
-                text=request.text,
-                language=request.language,
-                db=db,
-                api_key=api_key
-            )
-            
-            # Return the response from /translate-text without creating a new TextEntry
-            return {
-                "message": "Text translated and saved successfully",
-                "id": response["id"],
-                "translations": response["translations"]
-            }
-        
-        except HTTPException as e:
-            raise HTTPException(
-                status_code=e.status_code,
-                detail=f"AI translation failed: {e.detail}"
-            )
-    
-    else:
-        raise HTTPException(
-            status_code=403,
-            detail="Your API key does not have the required permissions for this operation"
-        )
+class UserCreate(BaseModel):
+    username: str
+    email: str
+    is_active: bool = True
 
-@app.get("/get-texts/")
-async def get_texts(
-    db: Session = Depends(get_db),
-    api_key: str = Depends(validate_api_key),
-    filter_by_key: bool = True
-):
-    query = db.query(TextEntry)
-    if filter_by_key:
-        query = query.filter(TextEntry.apikey_requested == api_key)
-    texts = query.all()
-    return texts
+class UserUpdate(BaseModel):
+    username: Optional[str] = None
+    email: Optional[str] = None
+    is_active: Optional[bool] = None
+
+class BillingPeriod(str, Enum):
+    MONTHLY = "monthly"
+    QUARTERLY = "quarterly"
+    ANNUALLY = "annually"
+
+class UserStatisticsRequest(BaseModel):
+    user_id: Optional[int] = None
+    period: BillingPeriod = BillingPeriod.MONTHLY
+    start_date: Optional[str] = None  # Format: YYYY-MM-DD
+    end_date: Optional[str] = None    # Format: YYYY-MM-DD
+
+# Mount static files and templates (only for home page)
+templates = Jinja2Templates(directory="web/templates")
+app.mount("/static", StaticFiles(directory="web/static"), name="static")
+
+# HOME PAGE - Only interface remaining
+@app.get("/", response_class=HTMLResponse)
+async def home(request: Request):
+    return templates.TemplateResponse("traductor.html", {
+        "request": request,
+    })
+
+# TRANSLATION ENDPOINTS
 
 @app.post("/translate-text/")
 async def translate_text(
     text: str = Form(...),
     source_language: Language = Form(...),
-    target_languages: List[Language] = Form(None),  # Optional list of target languages
-    translation_style: str = Form(None),  # Optional translation style
+    target_languages: List[Language] = Form(None),
+    translation_style: str = Form(None),
     db: Session = Depends(get_db),
-    api_key: str = Header(..., alias="X-API-Key")
+    api_key: str = Depends(validate_api_key)
 ):
-    # Validate the API key
-    db_key = db.query(APIKey).filter(
-        APIKey.key == api_key,
-        APIKey.is_active == True
-    ).first()
-    
-    if not db_key:
-        raise HTTPException(
-            status_code=401,
-            detail="Invalid API Key"
-        )
-    
-    # Get the user associated with the API key
-    user = db.query(User).filter(User.api_key == api_key).first()
-    if not user:
-        raise HTTPException(
-            status_code=401,
-            detail="User not found for the provided API Key"
-        )
-    
+    """
+    Translate text from source language to target languages
+    """
     # Validate target languages
     all_languages = [lang for lang in Language]
     if target_languages:
@@ -341,7 +234,7 @@ async def translate_text(
     
     # Translate the text
     translations = {}
-    model_version = "gpt-4-turbo"  # Updated model version
+    model_version = "gpt-4-turbo"
     try:
         for target_lang in target_languages:
             # Build the translation prompt
@@ -374,8 +267,8 @@ async def translate_text(
                 text_entry_id=db_text.id,
                 language=lang,
                 translated_text=translated_text,
-                style=translation_style,  # Save the translation style
-                model_version=model_version  # Save the model version
+                style=translation_style,
+                model_version=model_version
             )
             db.add(db_translation)
         
@@ -397,33 +290,16 @@ async def translate_text(
 
 @app.post("/translate-csv/")
 async def translate_csv(
-    file: bytes = File(...),  # CSV file upload
+    file: bytes = File(...),
     source_language: Language = Form(...),
-    target_languages: List[Language] = Form(None),  # Optional list of target languages
-    translation_style: str = Form(None),  # Optional translation style
+    target_languages: List[Language] = Form(None),
+    translation_style: str = Form(None),
     db: Session = Depends(get_db),
-    api_key: str = Header(..., alias="X-API-Key")
+    api_key: str = Depends(validate_api_key)
 ):
-    # Validate the API key
-    db_key = db.query(APIKey).filter(
-        APIKey.key == api_key,
-        APIKey.is_active == True
-    ).first()
-    
-    if not db_key:
-        raise HTTPException(
-            status_code=401,
-            detail="Invalid API Key"
-        )
-    
-    # Get the user associated with the API key
-    user = db.query(User).filter(User.api_key == api_key).first()
-    if not user:
-        raise HTTPException(
-            status_code=401,
-            detail="User not found for the provided API Key"
-        )
-    
+    """
+    Translate CSV file from source language to target languages
+    """
     # Validate target languages
     all_languages = [lang for lang in Language]
     if target_languages:
@@ -455,10 +331,10 @@ async def translate_csv(
         )
     
     # The first column contains the texts to be translated
-    texts = [row[0] for row in rows if row]  # Extract the first column
+    texts = [row[0] for row in rows if row]
     translations = {lang.value: [] for lang in target_languages}
-    model_version = "gpt-4-turbo"  # Specify the model version used
-    total_tokens_used = 0  # Track total tokens used for cost calculation
+    model_version = "gpt-4-turbo"
+    total_tokens_used = 0
 
     try:
         for target_lang in target_languages:
@@ -489,8 +365,7 @@ async def translate_csv(
             translations[target_lang.value] = parsed_translations
         
         # Calculate the cost based on OpenAI's pricing
-        # Example: GPT-4 Turbo costs $0.03 per 1,000 tokens for input and $0.06 per 1,000 tokens for output
-        cost_per_1k_tokens = 0.03  # Adjust based on OpenAI's pricing
+        cost_per_1k_tokens = 0.03
         total_cost = (total_tokens_used / 1000) * cost_per_1k_tokens
         
         # Write translations to the CSV
@@ -507,7 +382,7 @@ async def translate_csv(
             writer.writerow(row)
         
         output_csv.seek(0)
-        csv_data = output_csv.getvalue().encode("utf-8")  # Convert CSV to binary data
+        csv_data = output_csv.getvalue().encode("utf-8")
         
         # Save the request and CSV file in the database
         translation_request = TranslationRequest(
@@ -515,7 +390,8 @@ async def translate_csv(
             target_languages=",".join([lang.value for lang in target_languages]),
             translation_style=translation_style,
             csv_file=csv_data,
-            cost=total_cost  # Save the calculated cost
+            cost=total_cost,
+            apikey_requested=api_key
         )
         db.add(translation_request)
         db.commit()
@@ -533,1350 +409,28 @@ async def translate_csv(
             detail=f"Translation failed: {str(e)}"
         )
 
-@app.get("/admin/api-keys/")
-async def list_api_keys(
-    db: Session = Depends(get_db),
-    admin_key: str = Header(..., alias="X-Admin-Key")  # Require admin key for management
-):
-    if admin_key != os.getenv("ADMIN_KEY", "your-admin-key"):
-        raise HTTPException(
-            status_code=401,
-            detail="Invalid admin key"
-        )
-    
-    keys = db.query(APIKey).all()
-    return keys
-
-@app.post("/admin/api-keys/")
-async def create_api_key(
-    name: str = Form(...),
-    db: Session = Depends(get_db),
-    admin_key: str = Header(..., alias="X-Admin-Key")
-):
-    if admin_key != os.getenv("ADMIN_KEY", "your-admin-key"):
-        raise HTTPException(
-            status_code=401,
-            detail="Invalid admin key"
-        )
-    
-    # Generate a new API key
-    new_key = token_urlsafe(32)
-    
-    db_key = APIKey(
-        key=new_key,
-        name=name
-    )
-    
-    db.add(db_key)
-    db.commit()
-    db.refresh(db_key)
-    
-    return {
-        "id": db_key.id,
-        "key": new_key,
-        "name": name,
-        "created_at": db_key.created_at
-    }
-
-@app.delete("/admin/api-keys/{key_id}")
-async def delete_api_key(
-    key_id: int,
-    db: Session = Depends(get_db),
-    admin_key: str = Header(..., alias="X-Admin-Key")
-):
-    if admin_key != os.getenv("ADMIN_KEY", "your-admin-key"):
-        raise HTTPException(
-            status_code=401,
-            detail="Invalid admin key"
-        )
-    
-    db_key = db.query(APIKey).filter(APIKey.id == key_id).first()
-    if not db_key:
-        raise HTTPException(
-            status_code=404,
-            detail="API key not found"
-        )
-    
-    db_key.is_active = False  # Soft delete
-    db.commit()
-    
-    return {"message": "API key deactivated successfully"}
-
-# Helper function to get the current active admin user
-async def get_current_active_admin(
-    request: Request
-) -> User:
-    current_user = getattr(request.state, "user", None)
-    if not current_user:
-        return RedirectResponse(url="/login", status_code=303)
-    if not current_user.is_active:
-        raise HTTPException(status_code=403, detail="Inactive user")
-    if not current_user.is_admin:
-        raise HTTPException(status_code=403, detail="Not an admin")
-    return current_user
-
-@app.put("/api/admin/api-keys/{key_id}/toggle")
-async def toggle_api_key_status(
-    key_id: int,
-    current_user: User = Depends(get_current_active_admin),
-    db: Session = Depends(get_db)
-):
-    api_key = db.query(APIKey).filter(APIKey.id == key_id).first()
-    if not api_key:
-        raise HTTPException(status_code=404, detail="API key not found")
-    
-    # Toggle the active status
-    api_key.is_active = not api_key.is_active
-    db.commit()
-    return {"message": f"API key {'activated' if api_key.is_active else 'deactivated'} successfully"}
-
-@app.get("/api/admin/api-keys/{key_id}/stats")
-async def get_api_key_stats(
-    key_id: int,
-    current_user: User = Depends(get_current_active_admin),
-    db: Session = Depends(get_db)
-):
-    api_key = db.query(APIKey).filter(APIKey.id == key_id).first()
-    if not api_key:
-        raise HTTPException(status_code=404, detail="API key not found")
-    
-    # Fetch stats for the API key
-    usage_count = db.query(TextEntry).filter(TextEntry.apikey_requested == api_key.key).count()
-    last_used = api_key.last_used  # Ensure this field exists in your database model
-    return {
-        "name": api_key.name,
-        "usage_count": usage_count,
-        "last_used": last_used.isoformat() if last_used else None,
-        "is_active": api_key.is_active
-    }
-
-openai.api_key = os.getenv("OPENAI_API_KEY")
-
-templates = Jinja2Templates(directory="web/templates")
-app.mount("/static", StaticFiles(directory="web/static"), name="static")
-
-def escapejs(value):
-    return escape(value).replace("'", "\\'").replace('"', '\\"')
-
-# Add the filter to your Jinja2 environment
-templates.env.filters['escapejs'] = escapejs
-
-@app.get("/", response_class=HTMLResponse)
-async def home(request: Request):
-    return templates.TemplateResponse("traductor.html", {
-        "request": request,
-        # Add any additional context data here if needed
-    })
-
-@app.get("/register", response_class=HTMLResponse)
-async def register_page(request: Request):
-    return templates.TemplateResponse("register.html", {"request": request})
-
-@app.post("/register")
-async def register_user(
-    username: str = Form(...),
-    email: str = Form(...),
-    password: str = Form(...),
-    db: Session = Depends(get_db)
-):
-    # Check if the username or email already exists
-    if db.query(User).filter(User.username == username).first():
-        raise HTTPException(status_code=400, detail="Username already exists")
-    if db.query(User).filter(User.email == email).first():
-        raise HTTPException(status_code=400, detail="Email already exists")
-    
-    # Create the user
-    hashed_password = get_password_hash(password)
-    new_user = User(username=username, email=email, hashed_password=hashed_password, is_active=True)
-    db.add(new_user)
-    db.commit()
-    db.refresh(new_user)
-    
-    # Redirect to subscription selection
-    return RedirectResponse(url=f"/select-subscription?user_id={new_user.id}", status_code=303)
-
-@app.get("/select-subscription", response_class=HTMLResponse)
-async def select_subscription_page(user_id: int, request: Request, db: Session = Depends(get_db)):
-    subscriptions = db.query(Subscription).all()
-    return templates.TemplateResponse("select_subscription.html", {
-        "request": request,
-        "user_id": user_id,
-        "subscriptions": subscriptions
-    })
-
-# Authentication constants and dependencies
-SECRET_KEY = os.getenv("SECRET_KEY", "your-secret-key-here")
-ALGORITHM = "HS256"
-ACCESS_TOKEN_EXPIRE_MINUTES = 30
-
-pwd_context = CryptContext(
-    schemes=["bcrypt"],
-    deprecated="auto",
-    bcrypt__rounds=12
-)
-
-oauth2_scheme = OAuth2PasswordBearer(
-    tokenUrl="token",
-    auto_error=False
-)
-
-# Authentication helper functions
-def verify_password(plain_password, hashed_password):
-    return pwd_context.verify(plain_password, hashed_password)
-
-def get_password_hash(password):
-    return pwd_context.hash(password)
-
-def create_access_token(data: dict):
-    to_encode = data.copy()
-    expire = datetime.utcnow() + timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
-    to_encode.update({"exp": expire})
-    encoded_jwt = jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
-    return encoded_jwt
-
-def authenticate_user(db: Session, username: str, password: str) -> Optional[User]:
-    user = db.query(User).filter(User.username == username).first()
-    if user and verify_password(password, user.hashed_password):
-        return user
-    return None
-
-# User authentication functions
-async def get_current_user(request: Request) -> Optional[User]:
-    return getattr(request.state, "user", None)
-
-async def get_current_active_admin(
-    request: Request,
-    current_user: Optional[User] = Depends(get_current_user)
-) -> User:
-    if not current_user:
-        return RedirectResponse(url="/login", status_code=303)
-    if not current_user.is_active:
-        raise HTTPException(status_code=403, detail="Inactive user")
-    if not current_user.is_admin:
-        raise HTTPException(status_code=403, detail="Not an admin")
-    return current_user
-
-# Authentication routes
-@app.post("/token")
-async def login_for_access_token(
-    form_data: OAuth2PasswordRequestForm = Depends(),
-    db: Session = Depends(get_db)
-):
-    logger.info(f"Login attempt for username: {form_data.username}")
-    user = authenticate_user(db, form_data.username, form_data.password)
-    if not user:
-        logger.info("Invalid login attempt.")
-        raise HTTPException(
-            status_code=401,
-            detail="Incorrect username or password",
-            headers={"WWW-Authenticate": "Bearer"},
-        )
-    
-    # Generate token
-    access_token = create_access_token(data={"sub": user.username, "is_admin": user.is_admin})
-    logger.info(f"Generated token for user {user.username}: {access_token}")
-    
-    # Set token in cookie
-    response = RedirectResponse(
-        url="/admin/dashboard" if user.is_admin else "/client/dashboard",
-        status_code=303
-    )
-    response.set_cookie(
-        key="access_token",
-        value=f"Bearer {access_token}",
-        httponly=True,
-        secure=False,  # Set to True in production with HTTPS
-        samesite="lax",
-        max_age=1800  # 30 minutes
-    )
-    return response
-
-@app.get("/login", response_class=HTMLResponse)
-async def login_page(request: Request):
-    return templates.TemplateResponse("login.html", {"request": request})
-
-@app.get("/logout")
-async def logout(request: Request):
-    response = RedirectResponse(url="/login", status_code=303)
-    response.delete_cookie("access_token")
-    return response
-
-@app.post("/logout")
-async def logout(request: Request):
-    """
-    Logs out the current user by clearing the authentication cookie.
-    """
-    response = RedirectResponse(url="/", status_code=303)
-    response.delete_cookie(key="access_token", httponly=True, secure=True, samesite="lax")
-    return response
-
-@app.get("/admin/dashboard", response_class=HTMLResponse)
-async def admin_dashboard(
-    request: Request,
-    current_user: User = Depends(get_current_active_admin),
-    db: Session = Depends(get_db)
-):
-    logger.info(f"Accessing admin dashboard with user: {current_user.username}")
-    
- # Current time
-    now = datetime.utcnow()
-
-    # Time ranges
-    last_24_hours = now - timedelta(hours=24)
-    last_7_days = now - timedelta(days=7)
-    last_30_days = now - timedelta(days=30)
-
-    # Manual translations
-    manual_translations_last_24_hours = db.query(TextEntry).filter(
-        TextEntry.is_human_translation == True,
-        TextEntry.created_at >= last_24_hours
-    ).count()
-
-    manual_translations_last_7_days = db.query(TextEntry).filter(
-        TextEntry.is_human_translation == True,
-        TextEntry.created_at >= last_7_days
-    ).count()
-
-    manual_translations_last_30_days = db.query(TextEntry).filter(
-        TextEntry.is_human_translation == True,
-        TextEntry.created_at >= last_30_days
-    ).count()
-
-    # AI translations
-    ai_translations_last_24_hours = db.query(TextEntry).filter(
-        TextEntry.is_human_translation == False,
-        TextEntry.created_at >= last_24_hours
-    ).count()
-
-    ai_translations_last_7_days = db.query(TextEntry).filter(
-        TextEntry.is_human_translation == False,
-        TextEntry.created_at >= last_7_days
-    ).count()
-
-    ai_translations_last_30_days = db.query(TextEntry).filter(
-        TextEntry.is_human_translation == False,
-        TextEntry.created_at >= last_30_days
-    ).count()
-    # Top 10 API keys by usage
-    top_10_api_keys = db.query(
-        TextEntry.apikey_requested,
-        func.count(TextEntry.id).label("usage_count")
-    ).group_by(TextEntry.apikey_requested).order_by(desc("usage_count")).limit(10).all()
-
-    # Prepare stats object
-    stats = {
-        "manual_translations": {
-            "last_24_hours": manual_translations_last_24_hours,
-            "last_7_days": manual_translations_last_7_days,
-            "last_30_days": manual_translations_last_30_days,
-        },
-        "ai_translations": {
-            "last_24_hours": ai_translations_last_24_hours,
-            "last_7_days": ai_translations_last_7_days,
-            "last_30_days": ai_translations_last_30_days,
-        },
-        "top_10_api_keys": [(key, count) for key, count in top_10_api_keys]
-    }
-
-    
-    return templates.TemplateResponse("admin_dashboard.html", {
-        "request": request,
-        "user": current_user,
-        "stats": stats  # Pass stats to the template
-    })
-
-@app.get("/admin/subscriptions", response_class=HTMLResponse)
-async def admin_subscriptions(
-    request: Request,
-    current_user: User = Depends(get_current_active_admin),
-    db: Session = Depends(get_db)
-):
-    subscriptions = db.query(Subscription).all()
-    return templates.TemplateResponse("admin_subscriptions.html", {
-        "request": request,
-        "subscriptions": subscriptions
-    })
-
-@app.post("/admin/subscriptions")
-async def create_or_update_subscription(
-    id: Optional[int] = Form(None),  # Make `id` optional
-    name: str = Form(...),
-    price: float = Form(...),
-    description: str = Form(None),
-    current_user: User = Depends(get_current_active_admin),
-    db: Session = Depends(get_db)
-):
-    if id:
-        # Update existing subscription
-        subscription = db.query(Subscription).filter(Subscription.id == id).first()
-        if not subscription:
-            raise HTTPException(status_code=404, detail="Subscription not found")
-        subscription.name = name
-        subscription.price = price
-        subscription.description = description
-    else:
-        # Create new subscription
-        subscription = Subscription(name=name, price=price, description=description)
-        db.add(subscription)
-    db.commit()
-    return RedirectResponse(url="/admin/subscriptions", status_code=303)
-
-@app.post("/subscribe/{subscription_id}")
-async def subscribe_to_plan(
-    subscription_id: int,
-    current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db)
-):
-    subscription = db.query(Subscription).filter(Subscription.id == subscription_id).first()
-    if not subscription:
-        raise HTTPException(status_code=404, detail="Subscription not found")
-    
-    # Create or update user subscription
-    user_subscription = db.query(UserSubscription).filter(
-        UserSubscription.user_id == current_user.id,
-        UserSubscription.subscription_id == subscription_id
-    ).first()
-    if user_subscription:
-        user_subscription.is_active = True
-        user_subscription.start_date = datetime.utcnow()
-        user_subscription.renew_date = datetime.utcnow() + timedelta(days=30)
-    else:
-        user_subscription = UserSubscription(
-            user_id=current_user.id,
-            subscription_id=subscription_id,
-            is_active=True,
-            start_date=datetime.utcnow(),
-            renew_date=datetime.utcnow() + timedelta(days=30)
-        )
-        db.add(user_subscription)
-    db.commit()
-    return {"message": f"Subscribed to {subscription.name} successfully"}
-
-@app.post("/renew/{subscription_id}")
-async def renew_subscription(
-    subscription_id: int,
-    current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db)
-):
-    user_subscription = db.query(UserSubscription).filter(
-        UserSubscription.user_id == current_user.id,
-        UserSubscription.subscription_id == subscription_id,
-        UserSubscription.is_active == True
-    ).first()
-    if not user_subscription:
-        raise HTTPException(status_code=404, detail="Active subscription not found")
-    
-    # Update the renew date
-    user_subscription.renew_date = user_subscription.renew_date + timedelta(days=30)
-    db.commit()
-    return {"message": f"Subscription renewed successfully. Next renewal date: {user_subscription.renew_date}"}
-
-@app.post("/payment/simulate")
-async def simulate_payment(
-    subscription_id: int,
-    current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db)
-):
-    subscription = db.query(Subscription).filter(Subscription.id == subscription_id).first()
-    if not subscription:
-        raise HTTPException(status_code=404, detail="Subscription not found")
-    
-    # Simulate payment success
-    return {"message": f"Payment for {subscription.name} (${subscription.price}) successful"}
-
-@app.post("/simulate-payment")
-async def simulate_payment(
-    user_id: int = Form(...),
-    subscription_id: int = Form(...),
-    db: Session = Depends(get_db)
-):
-    # Fetch the subscription
-    subscription = db.query(Subscription).filter(Subscription.id == subscription_id).first()
-    if not subscription:
-        raise HTTPException(status_code=404, detail="Subscription not found")
-    
-    # Create an API key for the user
-    api_key = token_urlsafe(32)
-    db_api_key = APIKey(
-        key=api_key,
-        name=f"Key for user {user_id}",
-        is_active=True,
-        created_at=datetime.utcnow()
-    )
-    db.add(db_api_key)
-    db.commit()
-    db.refresh(db_api_key)
-
-    # Update the user's subscription and API key
-    user = db.query(User).filter(User.id == user_id).first()
-    if not user:
-        raise HTTPException(status_code=404, detail="User not found")
-    
-    user.api_key = api_key
-    user.model_permission = subscription.name.upper()  # Save the subscription name as the model permission
-    db.commit()
-
-    # Simulate payment success and create a user subscription
-    user_subscription = UserSubscription(
-        user_id=user_id,
-        subscription_id=subscription_id,
-        is_active=True,
-        start_date=datetime.utcnow(),
-        renew_date=datetime.utcnow() + timedelta(days=30)
-    )
-    db.add(user_subscription)
-    db.commit()
-    
-    return RedirectResponse(url="/my-subscriptions", status_code=303)
-
-@app.get("/my-subscriptions", response_class=HTMLResponse)
-async def my_subscriptions(
-    request: Request,
-    current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db)
-):
-    if not current_user:
-        return RedirectResponse(url="/login", status_code=303)
-
-    subscriptions = db.query(UserSubscription).filter(
-        UserSubscription.user_id == current_user.id,
-        UserSubscription.is_active == True
-    ).all()
-    return templates.TemplateResponse("my_subscriptions.html", {
-        "request": request,
-        "user": current_user,  # Pass the user object to the template
-        "subscriptions": subscriptions
-    })
-
-@app.exception_handler(HTTPException)
-async def http_exception_handler(request: Request, exc: HTTPException):
-    if exc.status_code in (status.HTTP_401_UNAUTHORIZED, status.HTTP_403_FORBIDDEN):
-        if request.url.path.startswith("/api/"):
-            return JSONResponse(
-                status_code=exc.status_code,
-                content={"detail": exc.detail},
-                headers=exc.headers
-            )
-        return RedirectResponse(
-            url="/login",
-            status_code=status.HTTP_303_SEE_OTHER
-        )
-    
-    return JSONResponse(
-        status_code=exc.status_code,
-        content={"detail": exc.detail}
-    )
-
-# Bootstrap admin route for initial setup
-@app.post("/bootstrap-admin")
-async def bootstrap_admin(
-    username: str = Form(...),
-    email: str = Form(...),
-    password: str = Form(...),
-    db: Session = Depends(get_db)
-):
-    # Check if any users exist
-    user_count = db.query(User).count()
-    if user_count > 0:
-        raise HTTPException(
-            status_code=400,
-            detail="Admin user already exists. Bootstrap is only for initial setup."
-        )
-    
-    # Create the first admin user
-    db_user = User(
-        username=username,
-        email=email,
-        hashed_password=get_password_hash(password),
-        is_admin=True,
-        is_active=True
-    )
-    db.add(db_user)
-    db.commit()
-    db.refresh(db_user)
-    
-    return {"message": "Admin user created successfully"}
-
-@app.get("/admin", response_class=HTMLResponse)
-async def admin_home(
-    request: Request,
-    current_user: User = Depends(get_current_active_admin)
-):
-    return templates.TemplateResponse("admin_home.html", {
-        "request": request,
-        "user": current_user
-    })
-
-@app.get("/admin/keys", response_class=HTMLResponse)
-async def admin_keys(
-    request: Request,
-    current_user: User = Depends(get_current_active_admin),
-    db: Session = Depends(get_db)
-):
-    api_keys = db.query(APIKey).all()
-    return templates.TemplateResponse("admin_keys.html", {
-        "request": request,
-        "api_keys": api_keys
-    })
-
-@app.get("/client/dashboard", response_class=HTMLResponse)
-async def client_dashboard(
-    request: Request,
-    current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db)
-):
-    logger.info(f"Accessing client dashboard with user: {current_user.username}")
-    
-    # Redirect admin users to the admin dashboard
-    if current_user.is_admin:
-        logger.info(f"User {current_user.username} is an admin. Redirecting to admin dashboard.")
-        return RedirectResponse(url="/admin/dashboard", status_code=303)
-    
-    # Fetch the last 10 human translations
-    human_translations = db.query(TextEntry)\
-        .filter(TextEntry.apikey_requested == current_user.api_key, TextEntry.is_human_translation == True)\
-        .order_by(TextEntry.created_at.desc())\
-        .limit(10)\
-        .all()
-
-    # Fetch the last 10 AI translations
-    ai_translations = db.query(TextEntry)\
-        .filter(TextEntry.apikey_requested == current_user.api_key, TextEntry.is_human_translation == False)\
-        .order_by(TextEntry.created_at.desc())\
-        .limit(10)\
-        .all()
-
-    # Prepare translation data
-    def prepare_translation_data(translations):
-        return [
-            {
-                "id": translation.id,
-                "created_at": translation.created_at,
-                "status": "Completed" if all(
-                    getattr(translation, lang) is not None for lang in ["english", "spanish", "portuguese", "french", "deutch", "italian"]
-                ) else "Pending",
-                "original_text": next(
-                    (getattr(translation, lang) for lang in ["english", "spanish", "portuguese", "french", "deutch", "italian"] if getattr(translation, lang) is not None),
-                    None
-                )
-            }
-            for translation in translations
-        ]
-
-    return templates.TemplateResponse("client_dashboard.html", {
-        "request": request,
-        "user": current_user,
-        "translations": {
-            "human": prepare_translation_data(human_translations),
-            "ai": prepare_translation_data(ai_translations)
-        }
-    })
-
-@app.get("/client", response_class=HTMLResponse)
-async def client_dashboard(
-    request: Request,
-    db: Session = Depends(get_db)
-):
-    # Get token from cookie
-    auth_cookie = request.cookies.get('access_token')
-    if not auth_cookie or not auth_cookie.startswith('Bearer '):
-        return RedirectResponse(url="/login", status_code=303)
-    
-    token = auth_cookie.split(' ')[1]
-    
-    try:
-        # Decode token
-        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
-        username = payload.get("sub")
-        if not username:
-            return RedirectResponse(url="/login", status_code=303)
-        
-        # Get user
-        user = db.query(User).filter(User.username == username).first()
-        if not user:
-            return RedirectResponse(url="/login", status_code=303)
-
-        # Get user's translations
-        translations = db.query(TextEntry)\
-            .filter(TextEntry.apikey_requested == user.api_key)\
-            .order_by(TextEntry.created_at.desc())\
-            .all()
-
-        response = templates.TemplateResponse(
-            "client_dashboard.html",  # Make sure this matches your template filename
-            {
-                "request": request,
-                "user": user,
-                "translations": translations or []  # Ensure translations is never None
-            }
-        )
-        
-        # Ensure token is refreshed in cookie
-        response.set_cookie(
-            key="access_token",
-            value=f"Bearer {token}",
-            httponly=True,
-            secure=True,
-            samesite="lax",
-            max_age=1800  # 30 minutes
-        )
-        
-        return response
-        
-    except Exception as e:
-        print(f"Client dashboard error: {str(e)}")  # Debug print
-        return RedirectResponse(url="/login", status_code=303)
-
-@app.get("/api/admin/statistics")
-async def get_statistics(
-    db: Session = Depends(get_db),
-    admin_key: str = Header(..., alias="X-Admin-Key")
-):
-    if admin_key != os.getenv("ADMIN_KEY"):
-        raise HTTPException(status_code=401, detail="Invalid admin key")
-    
-    total_keys = db.query(APIKey).count()
-    total_translations = db.query(TextEntry).count()
-    active_today = db.query(APIKey).filter(
-        APIKey.last_used >= datetime.utcnow() - timedelta(days=1)
-    ).count()
-    
-    return {
-        "total_keys": total_keys,
-        "total_translations": total_translations,
-        "active_today": active_today
-    }
-
-# Response models for better type hints and validation
-class PendingTranslation(BaseModel):
-    id: int
-    original_language: str
-    text: str
-    missing_translations: List[str]
-    created_at: Optional[datetime] = None  # Make it optional with default None
-    api_key_name: Optional[str] = None     # Make it optional with default None
-
-    class Config:
-        from_attributes = True  # This is needed for SQLAlchemy model conversion
-
-@app.get("/admin/pending-translations", response_model=List[PendingTranslation])
-async def get_pending_translations(
-    db: Session = Depends(get_db),
-    admin_key: str = Header(..., alias="X-Admin-Key")
-):
-    if admin_key != os.getenv("ADMIN_KEY"):
-        raise HTTPException(
-            status_code=401,
-            detail="Invalid admin key"
-        )
-    
-    try:
-        # Get entries that might have pending translations
-        entries = (
-            db.query(TextEntry, APIKey.name.label('api_key_name'))
-            .outerjoin(APIKey, TextEntry.apikey_requested == APIKey.key)  # Changed to outer join
-            .all()
-        )
-        
-        pending_translations = []
-        languages = ["english", "spanish", "portuguese", "french", "deutch", "italian"]
-        
-        for entry, api_key_name in entries:
-            # Find which language has content (original language)
-            original_language = None
-            original_text = None
-            missing_translations = []
-            
-            # Check each language field
-            for lang in languages:
-                value = getattr(entry, lang)
-                if value is not None and original_language is None:
-                    original_language = lang
-                    original_text = value
-                elif value is None:
-                    missing_translations.append(lang)
-            
-            # Only include entries that have missing translations
-            if missing_translations and original_language and original_text:
-                pending_translations.append(
-                    {
-                        "id": entry.id,
-                        "original_language": original_language,
-                        "text": original_text,
-                        "missing_translations": missing_translations,
-                        "created_at": entry.created_at,
-                        "api_key_name": api_key_name or "Unknown"  # Provide default value
-                    }
-                )
-        
-        # Sort by creation date, newest first
-        pending_translations.sort(key=lambda x: x.get('created_at') or datetime.min, reverse=True)
-        
-        return pending_translations
-        
-    except Exception as e:
-        raise HTTPException(
-            status_code=500,
-            detail=f"Error fetching pending translations: {str(e)}"
-        )
-
-@app.post("/admin/translations/{entry_id}")
-async def save_human_translation(
-    entry_id: int,
-    translation: dict,
-    db: Session = Depends(get_db),
-    admin_key: str = Header(..., alias="X-Admin-Key")
-):
-    if admin_key != os.getenv("ADMIN_KEY"):
-        raise HTTPException(status_code=401, detail="Invalid admin key")
-    
-    entry = db.query(TextEntry).filter(TextEntry.id == entry_id).first()
-    if not entry:
-        raise HTTPException(status_code=404, detail="Entry not found")
-    
-    # Update the specified language field
-    setattr(entry, translation["language"], translation["text"])
-    entry.updated_at = datetime.utcnow()
-    
-    db.commit()
-    
-    return {"message": "Translation saved successfully"}
-
-@app.get("/admin/human-translations", response_class=HTMLResponse)
-async def admin_human_translations(
-    request: Request,
-    current_user: User = Depends(get_current_active_admin),
-    db: Session = Depends(get_db)
-):
-    # Get pending human translations
-    pending_translations = db.query(TextEntry)\
-        .filter(TextEntry.is_human_translation == True)\
-        .filter(TextEntry.updated_at == None)\
-        .order_by(TextEntry.created_at.desc())\
-        .all()
-    
-    # Get completed human translations
-    completed_translations = db.query(TextEntry)\
-        .filter(TextEntry.is_human_translation == True)\
-        .filter(TextEntry.updated_at != None)\
-        .order_by(TextEntry.updated_at.desc())\
-        .all()
-    
-    return templates.TemplateResponse(
-        "admin_human_translations.html",
-        {
-            "request": request,
-            "user": current_user,
-            "pending_translations": pending_translations,
-            "completed_translations": completed_translations
-        }
-    )
-
-@app.get("/get-text/{text_id}")
-async def get_text_by_id(
-    text_id: int = Path(..., gt=0),  # Ensure positive integer
-    db: Session = Depends(get_db),
-    api_key: str = Header(..., alias="X-API-Key")
-):
-    # Validate API key
-    db_api_key = db.query(APIKey).filter(APIKey.key == api_key).first()
-    if not db_api_key:
-        raise HTTPException(
-            status_code=401,
-            detail="Invalid API key"
-        )
-
-    # Get the text entry
-    text_entry = (
-        db.query(TextEntry)
-        .filter(TextEntry.id == text_id)
-        .first()
-    )
-
-    # Check if text exists
-    if not text_entry:
-        raise HTTPException(
-            status_code=404,
-            detail="Text not found"
-        )
-
-    # Check if the API key has access to this text
-    if text_entry.apikey_requested != api_key:
-        raise HTTPException(
-            status_code=403,
-            detail="You don't have permission to access this text"
-        )
-
-    # Convert to dictionary and add metadata
-    result = {
-        "id": text_entry.id,
-        "translations": {
-            "english": text_entry.english,
-            "spanish": text_entry.spanish,
-            "portuguese": text_entry.portuguese,
-            "french": text_entry.french,
-            "deutch": text_entry.deutch,
-            "italian": text_entry.italian
-        },
-        "metadata": {
-            "created_at": text_entry.created_at,
-            "updated_at": text_entry.updated_at,
-            "api_key_name": db_api_key.name
-        }
-    }
-
-    # Remove None values from translations
-    result["translations"] = {
-        k: v for k, v in result["translations"].items() 
-        if v is not None
-    }
-
-    return result
-
-@app.post("/admin/create-user")
-async def create_user(
-    username: str = Form(...),
-    email: str = Form(...),
-    password: str = Form(...),
-    is_admin: bool = Form(False),
-    current_user: User = Depends(get_current_active_admin),
-    db: Session = Depends(get_db)
-):
-    db_user = User(
-        username=username,
-        email=email,
-        hashed_password=get_password_hash(password),
-        is_admin=is_admin
-    )
-    db.add(db_user)
-    db.commit()
-    db.refresh(db_user)
-    return {"message": "User created successfully"}
-
-@app.middleware("http")
-async def add_cors_headers(request: Request, call_next):
-    response = await call_next(request)
-    response.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
-    response.headers["Pragma"] = "no-cache"
-    response.headers["Expires"] = "0"
-    return response
-
-@app.middleware("http")
-async def authenticate_user_middleware(request: Request, call_next):
-    # Skip authentication for login and static routes
-    if request.url.path in ["/", "/login", "/register", "/token", "/select-subscription", "/simulate-payment"] or request.url.path.startswith("/static"):
-        return await call_next(request)
-
-    # Skip authentication for API routes using X-API-Key
-    if request.url.path.startswith("/save-text") or request.headers.get("X-API-Key"):
-        return await call_next(request)
-
-    # Get token from header or cookie
-    token = None
-    auth_cookie = request.cookies.get('access_token')
-    if auth_cookie and auth_cookie.startswith('Bearer '):
-        token = auth_cookie.split(' ')[1]
-        logger.info(f"Token found in cookie: {token}")
-    else:
-        logger.info("No token found. Redirecting to login.")
-        return RedirectResponse(url="/login", status_code=303)
-
-    try:
-        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
-        username = payload.get("sub")
-        logger.info(f"Decoded token payload: {payload}")
-        if username:
-            db = SessionLocal()
-            try:
-                user = db.query(User).filter(User.username == username).first()
-                if user and user.is_active:
-                    request.state.user = user
-                    response = await call_next(request)
-                    return response
-            finally:
-                db.close()
-    except JWTError as e:
-        logger.error(f"JWT decoding error: {str(e)}")
-
-    return RedirectResponse(url="/login", status_code=303)
-
-@app.get("/admin/users", response_class=HTMLResponse)
-async def admin_users_page(
-    request: Request,
-    current_user: User = Depends(get_current_active_admin),
-    db: Session = Depends(get_db),
-    page: int = Query(1, gt=0),  # Default to page 1
-    search: str = Query(None)   # Optional search query
-):
-    query = db.query(User)
-    
-    # Apply search filter if provided
-    if search:
-        query = query.filter(
-            (User.username.ilike(f"%{search}%")) | (User.email.ilike(f"%{search}%"))
-        )
-    
-    # Pagination
-    total_users = query.count()
-    users = query.offset((page - 1) * 25).limit(25).all()
-    
-    return templates.TemplateResponse(
-        "admin_users.html",
-        {
-            "request": request,
-            "users": users,
-            "total_users": total_users,
-            "current_page": page,
-            "search_query": search,
-        }
-    )
-
-@app.post("/api/admin/users")
-async def create_new_user(
-    username: str = Form(...),
-    email: str = Form(...),
-    password: str = Form(...),
-    is_admin: bool = Form(False),
-    model_permission: ModelPermission = Form(ModelPermission.BOTH),
-    current_user: User = Depends(get_current_active_admin),
-    db: Session = Depends(get_db)
-):
-    try:
-        # Check if username or email already exists
-        if db.query(User).filter(User.username == username).first():
-            raise HTTPException(status_code=400, detail="Username already registered")
-        if db.query(User).filter(User.email == email).first():
-            raise HTTPException(status_code=400, detail="Email already registered")
-        
-        # Generate API key if permissions are granted
-        api_key = None
-        if model_permission != ModelPermission.NONE:
-            api_key = token_urlsafe(32)
-            
-            # Create API key entry
-            db_key = APIKey(
-                key=api_key,
-                name=f"Key for {username}",
-                is_active=True,
-                created_at=datetime.utcnow()
-            )
-            db.add(db_key)
-            try:
-                db.flush()  # Ensure the API key is created before linking to user
-            except Exception as e:
-                db.rollback()
-                raise HTTPException(
-                    status_code=500,
-                    detail=f"Error creating API key: {str(e)}"
-                )
-        
-        # Create new user
-        new_user = User(
-            username=username,
-            email=email,
-            hashed_password=get_password_hash(password),
-            is_admin=is_admin,
-            is_active=True,
-            model_permission=model_permission,
-            api_key=api_key,  # Link the API key to the user
-            created_at=datetime.utcnow()
-        )
-        
-        db.add(new_user)
-        try:
-            db.commit()
-            db.refresh(new_user)
-        except Exception as e:
-            db.rollback()
-            raise HTTPException(
-                status_code=500,
-                detail=f"Error creating user: {str(e)}"
-            )
-        
-        return {
-            "message": "User created successfully",
-            "api_key": api_key,
-            "permissions": model_permission
-        }
-        
-    except Exception as e:
-        print(f"Error creating user: {str(e)}")
-        db.rollback()
-        raise HTTPException(
-            status_code=500,
-            detail=f"Error creating user: {str(e)}"
-        )
-
-@app.put("/api/admin/users/{user_id}")
-async def update_user(
-    user_id: int,
-    is_active: bool = Form(...),
-    is_admin: bool = Form(...),
-    current_user: User = Depends(get_current_active_admin),
-    db: Session = Depends(get_db)
-):
-    # Prevent self-modification
-    if user_id == current_user.id:
-        raise HTTPException(
-            status_code=400,
-            detail="Cannot modify your own admin status"
-        )
-    
-    user = db.query(User).filter(User.id == user_id).first()
-    if not user:
-        raise HTTPException(status_code=404, detail="User not found")
-    
-    user.is_active = is_active
-    user.is_admin = is_admin
-    db.commit()
-    return {"message": "User updated successfully"}
-
-@app.delete("/api/admin/users/{user_id}")
-async def delete_user(
-    user_id: int,
-    current_user: User = Depends(get_current_active_admin),
-    db: Session = Depends(get_db)
-):
-    # Prevent self-deletion
-    if user_id == current_user.id:
-        raise HTTPException(
-            status_code=400,
-            detail="Cannot delete your own account"
-        )
-    
-    user = db.query(User).filter(User.id == user_id).first()
-    if not user:
-        raise HTTPException(status_code=404, detail="User not found")
-    
-    db.delete(user)
-    db.commit()
-    return {"message": "User deleted successfully"}
-
-@app.put("/api/users/change-password")
-async def change_password(
-    current_password: str = Form(...),
-    new_password: str = Form(...),
-    current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db)
-):
-    """
-    Endpoint to allow users to change their password.
-    """
-    if not current_user:
-        raise HTTPException(
-            status_code=401,
-            detail="User not authenticated"
-        )
-    
-    # Verify the current password
-    if not verify_password(current_password, current_user.hashed_password):
-        raise HTTPException(
-            status_code=400,
-            detail="Current password is incorrect"
-        )
-    
-    # Hash the new password and update the user record
-    current_user.hashed_password = get_password_hash(new_password)
-    db.commit()
-    
-    return {"message": "Password updated successfully"}
-
-@app.post("/api/users/forgot-password")
-async def forgot_password(
-    email: str = Form(...),
-    new_password: str = Form(...),
-    reset_token: str = Form(...),
-    db: Session = Depends(get_db)
-):
-    """
-    Endpoint to reset a user's password using a reset token.
-    """
-    # Find the user by email
-    user = db.query(User).filter(User.email == email).first()
-    if not user:
-        raise HTTPException(
-            status_code=404,
-            detail="User with this email does not exist"
-        )
-    
-    # Verify the reset token (this assumes you have a token verification mechanism)
-    try:
-        payload = jwt.decode(reset_token, SECRET_KEY, algorithms=[ALGORITHM])
-        if payload.get("sub") != user.email:
-            raise HTTPException(
-                status_code=400,
-                detail="Invalid reset token"
-            )
-    except JWTError:
-        raise HTTPException(
-            status_code=400,
-            detail="Invalid or expired reset token"
-        )
-    
-    # Hash the new password and update the user record
-    user.hashed_password = get_password_hash(new_password)
-    db.commit()
-    
-    return {"message": "Password reset successfully"}
-
-@app.post("/api/users/request-password-reset")
-async def request_password_reset(
-    email: str = Form(...),
-    db: Session = Depends(get_db)
-):
-    """
-    Endpoint to request a password reset token.
-    """
-    user = db.query(User).filter(User.email == email).first()
-    if not user:
-        raise HTTPException(
-            status_code=404,
-            detail="User with this email does not exist"
-        )
-    
-    # Generate a reset token
-    reset_token = create_access_token(data={"sub": user.email})
-    
-    # Send the token via email (implement your email-sending logic here)
-    # Example: send_email(user.email, "Password Reset", f"Your reset token: {reset_token}")
-    
-    return {"message": f"Password reset token generated: {reset_token}"}
-
-# @app.on_event("startup")
-# async def alter_table():
-#     engine = create_engine(DATABASE_URL)
-#     with engine.connect() as connection:
-#         try:
-#             connection.execute(text("""
-#                 ALTER TABLE text_entries 
-#                 ADD COLUMN IF NOT EXISTS is_human_translation BOOLEAN DEFAULT FALSE
-#             """))
-#             connection.commit()
-#         except Exception as e:
-#             print(f"Migration error: {str(e)}")
-
-# Add renew_date column
-# def upgrade():
-#     op.add_column('user_subscriptions', sa.Column('renew_date', sa.DateTime(), nullable=True))
-
-# def downgrade():
-#     op.drop_column('user_subscriptions', 'renew_date')
-
-class TimeoutMiddleware(BaseHTTPMiddleware):
-    def __init__(self, app, timeout: int):
-        super().__init__(app)
-        self.timeout = timeout
-
-    async def dispatch(self, request: Request, call_next):
-        try:
-            return await asyncio.wait_for(call_next(request), timeout=self.timeout)
-        except asyncio.TimeoutError:
-            return Response("Request timed out", status_code=504)
-
-# Add the middleware to your FastAPI app
-app.add_middleware(TimeoutMiddleware, timeout=120)  # Set timeout to 120 seconds
-
-@app.get("/download-csv/{request_id}")
-async def download_csv(
-    request_id: int,
-    db: Session = Depends(get_db),
-    api_key: str = Header(..., alias="X-API-Key")
-):
-    # Validate the API key
-    db_key = db.query(APIKey).filter(
-        APIKey.key == api_key,
-        APIKey.is_active == True
-    ).first()
-    
-    if not db_key:
-        raise HTTPException(
-            status_code=401,
-            detail="Invalid API Key"
-        )
-    
-    # Retrieve the translation request
-    translation_request = db.query(TranslationRequest).filter(TranslationRequest.id == request_id).first()
-    if not translation_request:
-        raise HTTPException(
-            status_code=404,
-            detail="Translation request not found."
-        )
-    
-    # Return the CSV file
-    return StreamingResponse(
-        io.BytesIO(translation_request.csv_file),
-        media_type="text/csv",
-        headers={"Content-Disposition": f"attachment; filename=translation_{request_id}.csv"}
-    )
-
-@app.get("/bulk-translations/")
-async def list_bulk_translations(
-    db: Session = Depends(get_db),
-    api_key: str = Header(..., alias="X-API-Key")
-):
-    # Validate the API key
-    db_key = db.query(APIKey).filter(
-        APIKey.key == api_key,
-        APIKey.is_active == True
-    ).first()
-    
-    if not db_key:
-        raise HTTPException(
-            status_code=401,
-            detail="Invalid API Key"
-        )
-    
-    # Fetch all translation requests
-    translations = db.query(TranslationRequest).all()
-    return [
-        {
-            "id": t.id,
-            "source_language": t.source_language,
-            "target_languages": t.target_languages,
-            "translation_style": t.translation_style,
-            "status": t.status.value,
-            "created_at": t.created_at,
-            "cost": t.cost
-        }
-        for t in translations
-    ]
-
 @app.get("/api/translation/{translation_id}")
 async def get_translation_by_id(
     translation_id: int,
-    translation_type: str = Query("text", pattern="^(text|csv)$"),  # "text" or "csv"
+    translation_type: str = Query("text", pattern="^(text|csv)$"),
     db: Session = Depends(get_db),
-    api_key: str = Header(..., alias="X-API-Key")
+    api_key: str = Depends(validate_api_key)
 ):
+    """
+    Get a specific translation by ID
+    """
     try:
-        # Validate the API key
-        db_key = db.query(APIKey).filter(
-            APIKey.key == api_key,
-            APIKey.is_active == True
-        ).first()
-        
-        if not db_key:
-            raise HTTPException(
-                status_code=401,
-                detail="Invalid API Key"
-            )
-        
-        # Get the user associated with the API key
-        user = db.query(User).filter(User.api_key == api_key).first()
-        if not user:
-            raise HTTPException(
-                status_code=401,
-                detail="User not found for the provided API Key"
-            )
-        
         if translation_type == "csv":
             # Get CSV translation from TranslationRequest table
             translation_request = db.query(TranslationRequest)\
-                .filter(TranslationRequest.id == translation_id)\
+                .filter(
+                    TranslationRequest.id == translation_id,
+                    TranslationRequest.apikey_requested == api_key
+                )\
                 .first()
             
             if not translation_request:
-                raise HTTPException(status_code=404, detail="CSV translation not found")
+                raise HTTPException(status_code=404, detail="CSV translation not found or access denied")
             
             return {
                 "id": translation_request.id,
@@ -1894,7 +448,7 @@ async def get_translation_by_id(
             text_entry = db.query(TextEntry)\
                 .filter(
                     TextEntry.id == translation_id,
-                    TextEntry.apikey_requested == user.api_key
+                    TextEntry.apikey_requested == api_key
                 )\
                 .first()
             
@@ -1935,31 +489,22 @@ async def get_translation_by_id(
 async def download_translation_csv(
     translation_id: int,
     db: Session = Depends(get_db),
-    api_key: str = Header(..., alias="X-API-Key")
+    api_key: str = Depends(validate_api_key)
 ):
     """
     Download CSV file for bulk translations
     """
     try:
-        # Validate the API key
-        db_key = db.query(APIKey).filter(
-            APIKey.key == api_key,
-            APIKey.is_active == True
-        ).first()
-        
-        if not db_key:
-            raise HTTPException(
-                status_code=401,
-                detail="Invalid API Key"
-            )
-        
         # Get CSV translation from TranslationRequest table
         translation_request = db.query(TranslationRequest)\
-            .filter(TranslationRequest.id == translation_id)\
+            .filter(
+                TranslationRequest.id == translation_id,
+                TranslationRequest.apikey_requested == api_key
+            )\
             .first()
         
         if not translation_request:
-            raise HTTPException(status_code=404, detail="CSV translation not found")
+            raise HTTPException(status_code=404, detail="CSV translation not found or access denied")
         
         if not translation_request.csv_file:
             raise HTTPException(status_code=404, detail="CSV file not available")
@@ -1983,38 +528,18 @@ async def list_user_translations(
     limit: int = Query(50, le=100),
     offset: int = Query(0, ge=0),
     db: Session = Depends(get_db),
-    api_key: str = Header(..., alias="X-API-Key")
+    api_key: str = Depends(validate_api_key)
 ):
     """
     List all translations for the authenticated user
     """
     try:
-        # Validate the API key
-        db_key = db.query(APIKey).filter(
-            APIKey.key == api_key,
-            APIKey.is_active == True
-        ).first()
-        
-        if not db_key:
-            raise HTTPException(
-                status_code=401,
-                detail="Invalid API Key"
-            )
-        
-        # Get the user associated with the API key
-        user = db.query(User).filter(User.api_key == api_key).first()
-        if not user:
-            raise HTTPException(
-                status_code=401,
-                detail="User not found for the provided API Key"
-            )
-        
         result = {"text_translations": [], "csv_translations": []}
         
         if translation_type in ["all", "text"]:
             # Get text translations
             text_entries = db.query(TextEntry)\
-                .filter(TextEntry.apikey_requested == user.api_key)\
+                .filter(TextEntry.apikey_requested == api_key)\
                 .order_by(TextEntry.created_at.desc())\
                 .offset(offset)\
                 .limit(limit)\
@@ -2039,8 +564,9 @@ async def list_user_translations(
                 })
         
         if translation_type in ["all", "csv"]:
-            # Get CSV translations (you may want to add user association to TranslationRequest table)
+            # Get CSV translations
             csv_translations = db.query(TranslationRequest)\
+                .filter(TranslationRequest.apikey_requested == api_key)\
                 .order_by(TranslationRequest.created_at.desc())\
                 .offset(offset)\
                 .limit(limit)\
@@ -2064,3 +590,766 @@ async def list_user_translations(
     except Exception as e:
         print(f"List translations error: {str(e)}")
         raise HTTPException(status_code=500, detail="Internal server error")
+
+# USER MANAGEMENT ENDPOINTS (MASTER API KEY REQUIRED)
+
+@app.post("/api/admin/users/")
+async def create_user(
+    user: UserCreate,
+    db: Session = Depends(get_db),
+    master_key: str = Depends(validate_master_key)
+):
+    """
+    Create a new user (Master API key required)
+    """
+    # Check if username or email already exists
+    if db.query(User).filter(User.username == user.username).first():
+        raise HTTPException(status_code=400, detail="Username already registered")
+    if db.query(User).filter(User.email == user.email).first():
+        raise HTTPException(status_code=400, detail="Email already registered")
+    
+    # Generate API key for the user
+    api_key = token_urlsafe(32)
+    
+    # Create API key entry
+    db_key = APIKey(
+        key=api_key,
+        name=f"Key for {user.username}",
+        is_active=True,
+        created_at=datetime.utcnow()
+    )
+    db.add(db_key)
+    db.flush()
+    
+    # Create new user
+    new_user = User(
+        username=user.username,
+        email=user.email,
+        is_active=user.is_active,
+        api_key=api_key,
+        created_at=datetime.utcnow()
+    )
+    
+    # Link API key to user
+    db_key.user_id = new_user.id
+    
+    db.add(new_user)
+    db.commit()
+    db.refresh(new_user)
+    
+    return {
+        "id": new_user.id,
+        "username": new_user.username,
+        "email": new_user.email,
+        "is_active": new_user.is_active,
+        "api_key": api_key,
+        "created_at": new_user.created_at
+    }
+
+@app.get("/api/admin/users/")
+async def list_users(
+    limit: int = Query(50, le=100),
+    offset: int = Query(0, ge=0),
+    db: Session = Depends(get_db),
+    master_key: str = Depends(validate_master_key)
+):
+    """
+    List all users (Master API key required)
+    """
+    users = db.query(User).offset(offset).limit(limit).all()
+    return [
+        {
+            "id": user.id,
+            "username": user.username,
+            "email": user.email,
+            "is_active": user.is_active,
+            "api_key": user.api_key,
+            "created_at": user.created_at
+        }
+        for user in users
+    ]
+
+@app.get("/api/admin/users/{user_id}")
+async def get_user(
+    user_id: int,
+    db: Session = Depends(get_db),
+    master_key: str = Depends(validate_master_key)
+):
+    """
+    Get a specific user (Master API key required)
+    """
+    user = db.query(User).filter(User.id == user_id).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+    
+    return {
+        "id": user.id,
+        "username": user.username,
+        "email": user.email,
+        "is_active": user.is_active,
+        "api_key": user.api_key,
+        "created_at": user.created_at
+    }
+
+@app.put("/api/admin/users/{user_id}")
+async def update_user(
+    user_id: int,
+    user_update: UserUpdate,
+    db: Session = Depends(get_db),
+    master_key: str = Depends(validate_master_key)
+):
+    """
+    Update a user (Master API key required)
+    """
+    user = db.query(User).filter(User.id == user_id).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+    
+    # Update only provided fields
+    if user_update.username is not None:
+        # Check if new username already exists
+        existing_user = db.query(User).filter(
+            User.username == user_update.username,
+            User.id != user_id
+        ).first()
+        if existing_user:
+            raise HTTPException(status_code=400, detail="Username already exists")
+        user.username = user_update.username
+    
+    if user_update.email is not None:
+        # Check if new email already exists
+        existing_user = db.query(User).filter(
+            User.email == user_update.email,
+            User.id != user_id
+        ).first()
+        if existing_user:
+            raise HTTPException(status_code=400, detail="Email already exists")
+        user.email = user_update.email
+    
+    if user_update.is_active is not None:
+        user.is_active = user_update.is_active
+        # Also update the API key status
+        if user.api_key:
+            api_key_obj = db.query(APIKey).filter(APIKey.key == user.api_key).first()
+            if api_key_obj:
+                api_key_obj.is_active = user_update.is_active
+    
+    db.commit()
+    db.refresh(user)
+    
+    return {
+        "id": user.id,
+        "username": user.username,
+        "email": user.email,
+        "is_active": user.is_active,
+        "api_key": user.api_key,
+        "created_at": user.created_at
+    }
+
+@app.delete("/api/admin/users/{user_id}")
+async def delete_user(
+    user_id: int,
+    db: Session = Depends(get_db),
+    master_key: str = Depends(validate_master_key)
+):
+    """
+    Delete a user (Master API key required)
+    """
+    user = db.query(User).filter(User.id == user_id).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+    
+    # Deactivate the associated API key
+    if user.api_key:
+        api_key_obj = db.query(APIKey).filter(APIKey.key == user.api_key).first()
+        if api_key_obj:
+            api_key_obj.is_active = False
+    
+    db.delete(user)
+    db.commit()
+    
+    return {"message": "User deleted successfully"}
+
+@app.get("/api/admin/statistics")
+async def get_statistics(
+    db: Session = Depends(get_db),
+    master_key: str = Depends(validate_master_key)
+):
+    """
+    Get application statistics (Master API key required)
+    """
+    total_users = db.query(User).count()
+    active_users = db.query(User).filter(User.is_active == True).count()
+    total_api_keys = db.query(APIKey).count()
+    active_api_keys = db.query(APIKey).filter(APIKey.is_active == True).count()
+    total_text_translations = db.query(TextEntry).count()
+    total_csv_translations = db.query(TranslationRequest).count()
+    
+    # Translations in the last 24 hours
+    last_24_hours = datetime.utcnow() - timedelta(hours=24)
+    recent_text_translations = db.query(TextEntry).filter(
+        TextEntry.created_at >= last_24_hours
+    ).count()
+    recent_csv_translations = db.query(TranslationRequest).filter(
+        TranslationRequest.created_at >= last_24_hours
+    ).count()
+    
+    return {
+        "users": {
+            "total": total_users,
+            "active": active_users
+        },
+        "api_keys": {
+            "total": total_api_keys,
+            "active": active_api_keys
+        },
+        "translations": {
+            "text": {
+                "total": total_text_translations,
+                "last_24h": recent_text_translations
+            },
+            "csv": {
+                "total": total_csv_translations,
+                "last_24h": recent_csv_translations
+            }
+        }
+    }
+
+@app.get("/api/admin/users/{user_id}/statistics")
+async def get_user_statistics(
+    user_id: int,
+    period: BillingPeriod = Query(BillingPeriod.MONTHLY),
+    start_date: Optional[str] = Query(None, description="Start date in YYYY-MM-DD format. If provided, period will be calculated from this date."),
+    end_date: Optional[str] = Query(None, description="End date in YYYY-MM-DD format. Only used when start_date is provided."),
+    db: Session = Depends(get_db),
+    master_key: str = Depends(validate_master_key)
+):
+    """
+    Get detailed statistics for a specific user with billing analysis.
+    
+    Period calculation:
+    - If start_date is provided:
+      * If end_date is also provided: Uses exact date range
+      * If only start_date: Calculates end_date based on period (monthly: +1 month, quarterly: +3 months, annually: +1 year)
+    - If no start_date: Uses current date and goes backwards based on period
+    """
+    user = db.query(User).filter(User.id == user_id).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+    
+    # Calculate date range based on period and provided dates
+    if start_date:
+        try:
+            period_start = datetime.strptime(start_date, "%Y-%m-%d")
+            
+            if end_date:
+                # Use exact date range if both dates provided
+                period_end = datetime.strptime(end_date, "%Y-%m-%d")
+            else:
+                # Calculate end date based on period from start date
+                if period == BillingPeriod.MONTHLY:
+                    period_end = period_start + relativedelta(months=1)
+                elif period == BillingPeriod.QUARTERLY:
+                    period_end = period_start + relativedelta(months=3)
+                else:  # ANNUALLY
+                    period_end = period_start + relativedelta(years=1)
+                    
+        except ValueError:
+            raise HTTPException(
+                status_code=400, 
+                detail="Invalid date format. Use YYYY-MM-DD format."
+            )
+    else:
+        # Default behavior: go backwards from current date
+        period_end = datetime.utcnow()
+        if period == BillingPeriod.MONTHLY:
+            period_start = period_end - relativedelta(months=1)
+        elif period == BillingPeriod.QUARTERLY:
+            period_start = period_end - relativedelta(months=3)
+        else:  # ANNUALLY
+            period_start = period_end - relativedelta(years=1)
+    
+    # Ensure period_start is not after period_end
+    if period_start > period_end:
+        raise HTTPException(
+            status_code=400,
+            detail="Start date cannot be after end date"
+        )
+    
+    # Get text translation statistics
+    text_stats = db.query(
+        func.count(TextEntry.id).label('total_translations'),
+        func.count(func.distinct(func.date(TextEntry.created_at))).label('active_days')
+    ).filter(
+        TextEntry.apikey_requested == user.api_key,
+        TextEntry.created_at >= period_start,
+        TextEntry.created_at <= period_end
+    ).first()
+    
+    # Get detailed text translation metrics
+    text_translations = db.query(TextEntry).filter(
+        TextEntry.apikey_requested == user.api_key,
+        TextEntry.created_at >= period_start,
+        TextEntry.created_at <= period_end
+    ).all()
+    
+    # Count translations by language
+    language_counts = {}
+    total_characters_translated = 0
+    
+    for text_entry in text_translations:
+        translations = db.query(Translation).filter(
+            Translation.text_entry_id == text_entry.id
+        ).all()
+        
+        for trans in translations:
+            lang = trans.language
+            if lang not in language_counts:
+                language_counts[lang] = 0
+            language_counts[lang] += 1
+            total_characters_translated += len(trans.translated_text)
+    
+    # Get CSV translation statistics
+    csv_stats = db.query(
+        func.count(TranslationRequest.id).label('total_csv_translations'),
+        func.sum(TranslationRequest.cost).label('total_cost'),
+        func.avg(TranslationRequest.cost).label('avg_cost_per_csv')
+    ).filter(
+        TranslationRequest.apikey_requested == user.api_key,
+        TranslationRequest.created_at >= period_start,
+        TranslationRequest.created_at <= period_end
+    ).first()
+    
+    # Get CSV details for analysis
+    csv_translations = db.query(TranslationRequest).filter(
+        TranslationRequest.apikey_requested == user.api_key,
+        TranslationRequest.created_at >= period_start,
+        TranslationRequest.created_at <= period_end
+    ).all()
+    
+    # Calculate CSV metrics
+    csv_rows_processed = 0
+    csv_languages_used = set()
+    
+    for csv_trans in csv_translations:
+        # Estimate rows from CSV data
+        if csv_trans.csv_file:
+            csv_content = csv_trans.csv_file.decode('utf-8')
+            csv_rows_processed += len(csv_content.split('\n')) - 1  # Subtract header
+        
+        # Count unique target languages
+        target_langs = csv_trans.target_languages.split(',')
+        csv_languages_used.update(target_langs)
+    
+    # Calculate usage patterns
+    daily_usage = {}
+    for text_entry in text_translations:
+        date_key = text_entry.created_at.strftime('%Y-%m-%d')
+        if date_key not in daily_usage:
+            daily_usage[date_key] = 0
+        daily_usage[date_key] += 1
+    
+    for csv_trans in csv_translations:
+        date_key = csv_trans.created_at.strftime('%Y-%m-%d')
+        if date_key not in daily_usage:
+            daily_usage[date_key] = 0
+        daily_usage[date_key] += 1
+    
+    # Calculate peak usage
+    peak_day_usage = max(daily_usage.values()) if daily_usage else 0
+    avg_daily_usage = sum(daily_usage.values()) / len(daily_usage) if daily_usage else 0
+    
+    # Calculate the actual period length in days
+    actual_period_days = (period_end - period_start).days
+    
+    # Prepare statistics data
+    statistics = {
+        "user_id": user_id,
+        "username": user.username,
+        "email": user.email,
+        "period": period.value,
+        "period_start": period_start.isoformat(),
+        "period_end": period_end.isoformat(),
+        "actual_period_days": actual_period_days,
+        "period_calculation_method": "custom_dates" if start_date else "backwards_from_now",
+        "text_translations": {
+            "total_translations": text_stats.total_translations or 0,
+            "total_characters": total_characters_translated,
+            "avg_characters_per_translation": total_characters_translated / (text_stats.total_translations or 1),
+            "languages_used": language_counts,
+            "unique_languages_count": len(language_counts),
+            "active_days": text_stats.active_days or 0
+        },
+        "csv_translations": {
+            "total_csv_files": csv_stats.total_csv_translations or 0,
+            "total_rows_processed": csv_rows_processed,
+            "total_cost": float(csv_stats.total_cost or 0),
+            "avg_cost_per_csv": float(csv_stats.avg_cost_per_csv or 0),
+            "languages_used": list(csv_languages_used),
+            "unique_languages_count": len(csv_languages_used)
+        },
+        "usage_patterns": {
+            "peak_day_usage": peak_day_usage,
+            "avg_daily_usage": round(avg_daily_usage, 2),
+            "total_active_days": len(daily_usage),
+            "usage_consistency": round(avg_daily_usage / peak_day_usage, 2) if peak_day_usage > 0 else 0
+        },
+        "totals": {
+            "total_api_calls": (text_stats.total_translations or 0) + (csv_stats.total_csv_translations or 0),
+            "total_openai_cost": float(csv_stats.total_cost or 0),
+            "estimated_text_cost": (text_stats.total_translations or 0) * 0.01  # Estimated cost per text translation
+        }
+    }
+    
+    # Generate AI-powered billing suggestion
+    billing_suggestion = await generate_billing_suggestion(statistics, period)
+    statistics["billing_analysis"] = billing_suggestion
+    
+    return statistics
+
+@app.get("/api/admin/billing-analysis")
+async def get_billing_analysis_all_users(
+    period: BillingPeriod = Query(BillingPeriod.MONTHLY),
+    start_date: Optional[str] = Query(None, description="Start date in YYYY-MM-DD format. If provided, period will be calculated from this date."),
+    end_date: Optional[str] = Query(None, description="End date in YYYY-MM-DD format. Only used when start_date is provided."),
+    db: Session = Depends(get_db),
+    master_key: str = Depends(validate_master_key)
+):
+    """
+    Get billing analysis for all users with flexible date range options
+    """
+    # Calculate date range (same logic as user statistics)
+    if start_date:
+        try:
+            period_start = datetime.strptime(start_date, "%Y-%m-%d")
+            
+            if end_date:
+                period_end = datetime.strptime(end_date, "%Y-%m-%d")
+            else:
+                if period == BillingPeriod.MONTHLY:
+                    period_end = period_start + relativedelta(months=1)
+                elif period == BillingPeriod.QUARTERLY:
+                    period_end = period_start + relativedelta(months=3)
+                else:  # ANNUALLY
+                    period_end = period_start + relativedelta(years=1)
+                    
+        except ValueError:
+            raise HTTPException(
+                status_code=400, 
+                detail="Invalid date format. Use YYYY-MM-DD format."
+            )
+    else:
+        period_end = datetime.utcnow()
+        if period == BillingPeriod.MONTHLY:
+            period_start = period_end - relativedelta(months=1)
+        elif period == BillingPeriod.QUARTERLY:
+            period_start = period_end - relativedelta(months=3)
+        else:  # ANNUALLY
+            period_start = period_end - relativedelta(years=1)
+    
+    if period_start > period_end:
+        raise HTTPException(
+            status_code=400,
+            detail="Start date cannot be after end date"
+        )
+    
+    users = db.query(User).filter(User.is_active == True).all()
+    
+    billing_summary = []
+    total_revenue_potential = 0
+    
+    for user in users:
+        try:
+            # Get text translation statistics
+            text_stats = db.query(
+                func.count(TextEntry.id).label('total_translations')
+            ).filter(
+                TextEntry.apikey_requested == user.api_key,
+                TextEntry.created_at >= period_start,
+                TextEntry.created_at <= period_end
+            ).first()
+            
+            # Get CSV translation statistics
+            csv_stats = db.query(
+                func.count(TranslationRequest.id).label('total_csv_translations'),
+                func.sum(TranslationRequest.cost).label('total_cost')
+            ).filter(
+                TranslationRequest.apikey_requested == user.api_key,
+                TranslationRequest.created_at >= period_start,
+                TranslationRequest.created_at <= period_end
+            ).first()
+            
+            total_api_calls = (text_stats.total_translations or 0) + (csv_stats.total_csv_translations or 0)
+            total_openai_cost = float(csv_stats.total_cost or 0)
+            
+            # Simple billing calculation for summary
+            if total_api_calls < 50:
+                usage_tier = "light"
+                suggested_charge = max(total_openai_cost * 1.5, 5.0)
+            elif total_api_calls < 200:
+                usage_tier = "moderate" 
+                suggested_charge = max(total_openai_cost * 1.4, 15.0)
+            elif total_api_calls < 1000:
+                usage_tier = "heavy"
+                suggested_charge = total_openai_cost * 1.3
+            else:
+                usage_tier = "enterprise"
+                suggested_charge = total_openai_cost * 1.2
+            
+            billing_summary.append({
+                "user_id": user.id,
+                "username": user.username,
+                "email": user.email,
+                "suggested_charge": round(suggested_charge, 2),
+                "usage_tier": usage_tier,
+                "total_api_calls": total_api_calls,
+                "openai_costs": total_openai_cost
+            })
+            
+            total_revenue_potential += suggested_charge
+                
+        except Exception as e:
+            print(f"Error processing user {user.id}: {str(e)}")
+            continue
+    
+    # Sort by suggested charge (highest first)
+    billing_summary.sort(key=lambda x: x["suggested_charge"], reverse=True)
+    
+    actual_period_days = (period_end - period_start).days
+    
+    return {
+        "period": period.value,
+        "period_start": period_start.isoformat(),
+        "period_end": period_end.isoformat(),
+        "actual_period_days": actual_period_days,
+        "period_calculation_method": "custom_dates" if start_date else "backwards_from_now",
+        "total_users_analyzed": len(billing_summary),
+        "total_revenue_potential": round(total_revenue_potential, 2),
+        "avg_revenue_per_user": round(total_revenue_potential / len(billing_summary), 2) if billing_summary else 0,
+        "user_billing_summary": billing_summary
+    }
+
+async def generate_billing_suggestion(statistics: dict, period: BillingPeriod) -> dict:
+    """
+    Use OpenAI to analyze user statistics and suggest billing amounts
+    """
+    try:
+        # Prepare the data for AI analysis
+        analysis_prompt = f"""
+        Analyze the following user usage statistics and suggest a fair monthly billing amount:
+
+        User Statistics for {period.value} period:
+        - Text translations: {statistics['text_translations']['total_translations']}
+        - Total characters translated: {statistics['text_translations']['total_characters']}
+        - CSV files processed: {statistics['csv_translations']['total_csv_files']}
+        - CSV rows processed: {statistics['csv_translations']['total_rows_processed']}
+        - Total API calls: {statistics['totals']['total_api_calls']}
+        - OpenAI costs incurred: ${statistics['totals']['total_openai_cost']}
+        - Peak daily usage: {statistics['usage_patterns']['peak_day_usage']}
+        - Average daily usage: {statistics['usage_patterns']['avg_daily_usage']}
+        - Usage consistency: {statistics['usage_patterns']['usage_consistency']}
+        - Active days: {statistics['usage_patterns']['total_active_days']}
+        - Unique languages used: {statistics['text_translations']['unique_languages_count'] + statistics['csv_translations']['unique_languages_count']}
+
+        Consider the following factors:
+        1. Direct OpenAI API costs
+        2. Server and infrastructure costs
+        3. Profit margin (20-40%)
+        4. User usage patterns and consistency
+        5. Volume discounts for heavy users
+        6. Competitive pricing in the translation industry
+
+        Provide your analysis in the following JSON format (use actual numbers, not data types):
+        {{
+            "usage_tier": "light|moderate|heavy|enterprise",
+            "cost_breakdown": {{
+                "openai_costs": 0.00,
+                "infrastructure_costs": 0.00,
+                "profit_margin": 0.00,
+                "total": 0.00
+            }},
+            "suggested_monthly_charge": 0.00,
+            "reasoning": "detailed explanation of the pricing decision",
+            "recommendations": ["list of recommendations for this user"]
+        }}
+        
+        Important: Return only valid JSON with actual numeric values, not placeholder text.
+        """
+
+        response = openai.ChatCompletion.create(
+            model="gpt-4-turbo",
+            messages=[
+                {"role": "system", "content": "You are a pricing analyst expert in SaaS billing and API services. Provide detailed, fair, and competitive pricing suggestions. Always return valid JSON with numeric values."},
+                {"role": "user", "content": analysis_prompt}
+            ],
+            temperature=0.3  # Lower temperature for more consistent pricing
+        )
+        
+        # Parse the AI response
+        ai_response = response['choices'][0]['message']['content']
+        
+        # Try to extract JSON from the response
+        import json
+        import re
+        
+        # Clean the response and try to parse JSON
+        try:
+            # Remove any markdown formatting
+            cleaned_response = ai_response.strip()
+            if cleaned_response.startswith("```json"):
+                cleaned_response = cleaned_response[7:]
+            if cleaned_response.endswith("```"):
+                cleaned_response = cleaned_response[:-3]
+            cleaned_response = cleaned_response.strip()
+            
+            billing_analysis = json.loads(cleaned_response)
+            
+            # Validate that we have the required fields
+            if not all(key in billing_analysis for key in ["usage_tier", "cost_breakdown", "suggested_monthly_charge"]):
+                raise ValueError("Missing required fields in AI response")
+                
+        except (json.JSONDecodeError, ValueError) as e:
+            print(f"Error parsing AI response: {e}")
+            print(f"AI Response: {ai_response}")
+            # Fallback to manual calculation
+            billing_analysis = calculate_fallback_billing(statistics)
+        
+        # Adjust based on period
+        if period == BillingPeriod.QUARTERLY:
+            billing_analysis["suggested_charge"] = billing_analysis["suggested_monthly_charge"] * 3 * 0.95  # 5% discount for quarterly
+        elif period == BillingPeriod.ANNUALLY:
+            billing_analysis["suggested_charge"] = billing_analysis["suggested_monthly_charge"] * 12 * 0.85  # 15% discount for annual
+        else:
+            billing_analysis["suggested_charge"] = billing_analysis["suggested_monthly_charge"]
+        
+        return billing_analysis
+        
+    except Exception as e:
+        print(f"Error generating AI billing suggestion: {str(e)}")
+        # Fallback to manual calculation
+        return calculate_fallback_billing(statistics)
+
+def calculate_fallback_billing(statistics: dict) -> dict:
+    """
+    Fallback billing calculation if AI analysis fails
+    """
+    openai_costs = statistics['totals']['total_openai_cost']
+    api_calls = statistics['totals']['total_api_calls']
+    
+    # Base infrastructure cost per API call
+    infrastructure_cost_per_call = 0.002
+    infrastructure_costs = api_calls * infrastructure_cost_per_call
+    
+    # Profit margin (30%)
+    base_costs = openai_costs + infrastructure_costs
+    profit_margin = base_costs * 0.3
+    
+    suggested_charge = base_costs + profit_margin
+    
+    # Determine usage tier
+    if api_calls < 50:
+        usage_tier = "light"
+        suggested_charge = max(suggested_charge, 5.0)  # Minimum $5
+    elif api_calls < 200:
+        usage_tier = "moderate"
+        suggested_charge = max(suggested_charge, 15.0)  # Minimum $15
+    elif api_calls < 1000:
+        usage_tier = "heavy"
+        suggested_charge = suggested_charge * 0.95  # 5% volume discount
+    else:
+        usage_tier = "enterprise"
+        suggested_charge = suggested_charge * 0.85  # 15% volume discount
+    
+    return {
+        "usage_tier": usage_tier,
+        "cost_breakdown": {
+            "openai_costs": round(openai_costs, 2),
+            "infrastructure_costs": round(infrastructure_costs, 2),
+            "profit_margin": round(profit_margin, 2),
+            "total": round(suggested_charge, 2)
+        },
+        "suggested_monthly_charge": round(suggested_charge, 2),
+        "reasoning": f"Based on {api_calls} API calls with ${openai_costs:.2f} OpenAI costs, plus infrastructure and 30% margin",
+        "recommendations": [
+            "Monitor usage patterns for optimization opportunities",
+            "Consider volume discounts for consistent high usage"
+        ]
+    }
+
+@app.get("/api/admin/usage-trends")
+async def get_usage_trends(
+    days: int = Query(30, le=365),
+    db: Session = Depends(get_db),
+    master_key: str = Depends(validate_master_key)
+):
+    """
+    Get usage trends across all users for the specified number of days
+    """
+    end_date = datetime.utcnow()
+    start_date = end_date - timedelta(days=days)
+    
+    # Daily text translation counts
+    daily_text_stats = db.query(
+        func.date(TextEntry.created_at).label('date'),
+        func.count(TextEntry.id).label('count'),
+        func.count(func.distinct(TextEntry.apikey_requested)).label('unique_users')
+    ).filter(
+        TextEntry.created_at >= start_date,
+        TextEntry.created_at <= end_date
+    ).group_by(func.date(TextEntry.created_at)).all()
+    
+    # Daily CSV translation counts
+    daily_csv_stats = db.query(
+        func.date(TranslationRequest.created_at).label('date'),
+        func.count(TranslationRequest.id).label('count'),
+        func.sum(TranslationRequest.cost).label('total_cost'),
+        func.count(func.distinct(TranslationRequest.apikey_requested)).label('unique_users')
+    ).filter(
+        TranslationRequest.created_at >= start_date,
+        TranslationRequest.created_at <= end_date
+    ).group_by(func.date(TranslationRequest.created_at)).all()
+    
+    # Combine and format the data
+    trends = {}
+    
+    for stat in daily_text_stats:
+        date_str = stat.date.strftime('%Y-%m-%d')
+        trends[date_str] = {
+            'date': date_str,
+            'text_translations': stat.count,
+            'csv_translations': 0,
+            'total_cost': 0.0,
+            'unique_users': stat.unique_users
+        }
+    
+    for stat in daily_csv_stats:
+        date_str = stat.date.strftime('%Y-%m-%d')
+        if date_str in trends:
+            trends[date_str]['csv_translations'] = stat.count
+            trends[date_str]['total_cost'] = float(stat.total_cost or 0)
+            trends[date_str]['unique_users'] = max(trends[date_str]['unique_users'], stat.unique_users)
+        else:
+            trends[date_str] = {
+                'date': date_str,
+                'text_translations': 0,
+                'csv_translations': stat.count,
+                'total_cost': float(stat.total_cost or 0),
+                'unique_users': stat.unique_users
+            }
+    
+    # Sort by date
+    sorted_trends = sorted(trends.values(), key=lambda x: x['date'])
+    
+    return {
+        "period_days": days,
+        "start_date": start_date.strftime('%Y-%m-%d'),
+        "end_date": end_date.strftime('%Y-%m-%d'),
+        "daily_trends": sorted_trends,
+        "summary": {
+            "total_text_translations": sum(t['text_translations'] for t in sorted_trends),
+            "total_csv_translations": sum(t['csv_translations'] for t in sorted_trends),
+            "total_openai_costs": sum(t['total_cost'] for t in sorted_trends),
+            "peak_daily_usage": max((t['text_translations'] + t['csv_translations']) for t in sorted_trends) if sorted_trends else 0,
+            "avg_daily_usage": sum((t['text_translations'] + t['csv_translations']) for t in sorted_trends) / len(sorted_trends) if sorted_trends else 0
+        }
+    }
