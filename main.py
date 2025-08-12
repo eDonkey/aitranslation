@@ -2,10 +2,10 @@ from fastapi import FastAPI, Header, HTTPException, Depends, Request, Form, Path
 from fastapi.responses import HTMLResponse, FileResponse, RedirectResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
-from sqlalchemy import create_engine, Column, Integer, String, Text, TIMESTAMP, text, Boolean, DateTime, func, Float, ForeignKey, desc
+from sqlalchemy import create_engine, Column, Integer, String, Text, TIMESTAMP, text, Boolean, DateTime, func, Float, ForeignKey, desc, LargeBinary
 from sqlalchemy.ext.declarative import declarative_base
-from sqlalchemy.orm import sessionmaker, Session, relationship
-from typing import Optional, List
+from sqlalchemy.orm import sessionmaker, Session, relationship, declarative_base  # Updated import
+from typing import Optional, List, Union
 from datetime import datetime, timedelta
 from pydantic import BaseModel
 from enum import Enum
@@ -25,6 +25,14 @@ from jinja2 import Environment
 from markupsafe import escape
 from alembic import op
 import sqlalchemy as sa
+import io
+import csv
+from fastapi import File, UploadFile
+from fastapi.responses import StreamingResponse
+from starlette.middleware.base import BaseHTTPMiddleware
+from starlette.requests import Request
+from starlette.responses import Response
+import asyncio
 
 logger = logging.getLogger("uvicorn.error")
 
@@ -65,6 +73,8 @@ class Language(str, Enum):
     DEUTCH = "deutch"
     ITALIAN = "italian"
     FILIPINO = "filipino"
+    JAPANESE = "japanese"
+    VIETNAMESE = "vietnamese"
 
 # Database Model
 class TextEntry(Base):
@@ -145,6 +155,17 @@ class UserSubscription(Base):
     end_date = Column(DateTime, nullable=True)  # Optional for expiration
     user = relationship("User", back_populates="subscriptions")
     subscription = relationship("Subscription")
+
+class TranslationRequest(Base):
+    __tablename__ = "translation_requests"
+
+    id = Column(Integer, primary_key=True, index=True)
+    source_language = Column(String, nullable=False)
+    target_languages = Column(String, nullable=False)  # Comma-separated list
+    translation_style = Column(String, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    csv_file = Column(LargeBinary, nullable=False)  # Store the CSV as binary data
+    cost = Column(Float, nullable=False, default=0.0)  # Cost of the GPT API call
 
 # Create tables
 Base.metadata.create_all(bind=engine)
@@ -367,6 +388,144 @@ async def translate_text(
             "original_language": source_language.value,
             "translations": translations
         }
+    
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Translation failed: {str(e)}"
+        )
+
+@app.post("/translate-csv/")
+async def translate_csv(
+    file: bytes = File(...),  # CSV file upload
+    source_language: Language = Form(...),
+    target_languages: List[Language] = Form(None),  # Optional list of target languages
+    translation_style: str = Form(None),  # Optional translation style
+    db: Session = Depends(get_db),
+    api_key: str = Header(..., alias="X-API-Key")
+):
+    # Validate the API key
+    db_key = db.query(APIKey).filter(
+        APIKey.key == api_key,
+        APIKey.is_active == True
+    ).first()
+    
+    if not db_key:
+        raise HTTPException(
+            status_code=401,
+            detail="Invalid API Key"
+        )
+    
+    # Get the user associated with the API key
+    user = db.query(User).filter(User.api_key == api_key).first()
+    if not user:
+        raise HTTPException(
+            status_code=401,
+            detail="User not found for the provided API Key"
+        )
+    
+    # Validate target languages
+    all_languages = [lang for lang in Language]
+    if target_languages:
+        for lang in target_languages:
+            if lang not in all_languages:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Invalid target language: {lang}. Allowed languages are: {[l.value for l in all_languages]}"
+                )
+    else:
+        # If no target languages are provided, translate to all languages except the source language
+        target_languages = [lang for lang in all_languages if lang != source_language]
+    
+    # Read the CSV file
+    try:
+        input_csv = io.StringIO(file.decode("utf-8"))
+        reader = csv.reader(input_csv)
+        rows = list(reader)
+    except Exception as e:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Failed to read the CSV file: {str(e)}"
+        )
+    
+    if not rows or len(rows) < 1:
+        raise HTTPException(
+            status_code=400,
+            detail="The uploaded CSV file is empty or invalid."
+        )
+    
+    # The first column contains the texts to be translated
+    texts = [row[0] for row in rows if row]  # Extract the first column
+    translations = {lang.value: [] for lang in target_languages}
+    model_version = "gpt-4-turbo"  # Specify the model version used
+    total_tokens_used = 0  # Track total tokens used for cost calculation
+
+    try:
+        for target_lang in target_languages:
+            # Build a single prompt for all texts in the batch
+            style_prompt = f" in a {translation_style} style" if translation_style else ""
+            prompt = f"Translate the following texts from {source_language.value} to {target_lang.value}{style_prompt}. Only return the translations, one per line, without any additional commentary:\n"
+            prompt += "\n".join([f"- {text}" for text in texts])
+            
+            # Send a single API call for the batch
+            response = openai.ChatCompletion.create(
+                model=model_version,
+                messages=[
+                    {"role": "system", "content": "You are a professional translator."},
+                    {"role": "user", "content": prompt}
+                ]
+            )
+            
+            # Calculate tokens used
+            total_tokens_used += response['usage']['total_tokens']
+            
+            # Parse the response into individual translations
+            translated_texts = response['choices'][0]['message']['content'].split("\n")
+            parsed_translations = [text.strip("- ").strip() for text in translated_texts if text.strip()]
+            
+            # Fill missing translations with a placeholder
+            while len(parsed_translations) < len(texts):
+                parsed_translations.append("Translation missing")
+            translations[target_lang.value] = parsed_translations
+        
+        # Calculate the cost based on OpenAI's pricing
+        # Example: GPT-4 Turbo costs $0.03 per 1,000 tokens for input and $0.06 per 1,000 tokens for output
+        cost_per_1k_tokens = 0.03  # Adjust based on OpenAI's pricing
+        total_cost = (total_tokens_used / 1000) * cost_per_1k_tokens
+        
+        # Write translations to the CSV
+        output_csv = io.StringIO()
+        writer = csv.writer(output_csv)
+        
+        # Write the header row
+        header = ["Original"] + [lang.value for lang in target_languages]
+        writer.writerow(header)
+        
+        # Write the original texts and their translations
+        for i, text in enumerate(texts):
+            row = [text] + [translations[lang.value][i] for lang in target_languages]
+            writer.writerow(row)
+        
+        output_csv.seek(0)
+        csv_data = output_csv.getvalue().encode("utf-8")  # Convert CSV to binary data
+        
+        # Save the request and CSV file in the database
+        translation_request = TranslationRequest(
+            source_language=source_language.value,
+            target_languages=",".join([lang.value for lang in target_languages]),
+            translation_style=translation_style,
+            csv_file=csv_data,
+            cost=total_cost  # Save the calculated cost
+        )
+        db.add(translation_request)
+        db.commit()
+        
+        # Return the updated CSV file
+        return StreamingResponse(
+            io.BytesIO(csv_data),
+            media_type="text/csv",
+            headers={"Content-Disposition": "attachment; filename=translated.csv"}
+        )
     
     except Exception as e:
         raise HTTPException(
@@ -1603,5 +1762,305 @@ async def request_password_reset(
 # def downgrade():
 #     op.drop_column('user_subscriptions', 'renew_date')
 
-if __name__ == '__main__':
-    uvicorn.run('main:app', host='0.0.0.0', port=8000)
+class TimeoutMiddleware(BaseHTTPMiddleware):
+    def __init__(self, app, timeout: int):
+        super().__init__(app)
+        self.timeout = timeout
+
+    async def dispatch(self, request: Request, call_next):
+        try:
+            return await asyncio.wait_for(call_next(request), timeout=self.timeout)
+        except asyncio.TimeoutError:
+            return Response("Request timed out", status_code=504)
+
+# Add the middleware to your FastAPI app
+app.add_middleware(TimeoutMiddleware, timeout=120)  # Set timeout to 120 seconds
+
+@app.get("/download-csv/{request_id}")
+async def download_csv(
+    request_id: int,
+    db: Session = Depends(get_db),
+    api_key: str = Header(..., alias="X-API-Key")
+):
+    # Validate the API key
+    db_key = db.query(APIKey).filter(
+        APIKey.key == api_key,
+        APIKey.is_active == True
+    ).first()
+    
+    if not db_key:
+        raise HTTPException(
+            status_code=401,
+            detail="Invalid API Key"
+        )
+    
+    # Retrieve the translation request
+    translation_request = db.query(TranslationRequest).filter(TranslationRequest.id == request_id).first()
+    if not translation_request:
+        raise HTTPException(
+            status_code=404,
+            detail="Translation request not found."
+        )
+    
+    # Return the CSV file
+    return StreamingResponse(
+        io.BytesIO(translation_request.csv_file),
+        media_type="text/csv",
+        headers={"Content-Disposition": f"attachment; filename=translation_{request_id}.csv"}
+    )
+
+@app.get("/bulk-translations/")
+async def list_bulk_translations(
+    db: Session = Depends(get_db),
+    api_key: str = Header(..., alias="X-API-Key")
+):
+    # Validate the API key
+    db_key = db.query(APIKey).filter(
+        APIKey.key == api_key,
+        APIKey.is_active == True
+    ).first()
+    
+    if not db_key:
+        raise HTTPException(
+            status_code=401,
+            detail="Invalid API Key"
+        )
+    
+    # Fetch all translation requests
+    translations = db.query(TranslationRequest).all()
+    return [
+        {
+            "id": t.id,
+            "source_language": t.source_language,
+            "target_languages": t.target_languages,
+            "translation_style": t.translation_style,
+            "status": t.status.value,
+            "created_at": t.created_at,
+            "cost": t.cost
+        }
+        for t in translations
+    ]
+
+@app.get("/api/translation/{translation_id}")
+async def get_translation_by_id(
+    translation_id: int,
+    translation_type: str = Query("text", pattern="^(text|csv)$"),  # "text" or "csv"
+    db: Session = Depends(get_db),
+    api_key: str = Header(..., alias="X-API-Key")
+):
+    try:
+        # Validate the API key
+        db_key = db.query(APIKey).filter(
+            APIKey.key == api_key,
+            APIKey.is_active == True
+        ).first()
+        
+        if not db_key:
+            raise HTTPException(
+                status_code=401,
+                detail="Invalid API Key"
+            )
+        
+        # Get the user associated with the API key
+        user = db.query(User).filter(User.api_key == api_key).first()
+        if not user:
+            raise HTTPException(
+                status_code=401,
+                detail="User not found for the provided API Key"
+            )
+        
+        if translation_type == "csv":
+            # Get CSV translation from TranslationRequest table
+            translation_request = db.query(TranslationRequest)\
+                .filter(TranslationRequest.id == translation_id)\
+                .first()
+            
+            if not translation_request:
+                raise HTTPException(status_code=404, detail="CSV translation not found")
+            
+            return {
+                "id": translation_request.id,
+                "type": "csv",
+                "source_language": translation_request.source_language,
+                "target_languages": translation_request.target_languages.split(","),
+                "translation_style": translation_request.translation_style,
+                "cost": translation_request.cost,
+                "created_at": translation_request.created_at,
+                "csv_data": translation_request.csv_file.decode('utf-8') if translation_request.csv_file else None
+            }
+        
+        else:  # translation_type == "text"
+            # Get individual text translation
+            text_entry = db.query(TextEntry)\
+                .filter(
+                    TextEntry.id == translation_id,
+                    TextEntry.apikey_requested == user.api_key
+                )\
+                .first()
+            
+            if not text_entry:
+                raise HTTPException(status_code=404, detail="Translation not found or access denied")
+            
+            # Get all translations for this text entry
+            translations = db.query(Translation)\
+                .filter(Translation.text_entry_id == text_entry.id)\
+                .all()
+            
+            # Organize translations by language
+            translation_data = {}
+            for trans in translations:
+                translation_data[trans.language] = {
+                    "text": trans.translated_text,
+                    "style": trans.style,
+                    "model_version": trans.model_version
+                }
+            
+            return {
+                "id": text_entry.id,
+                "type": "text",
+                "translations": translation_data,
+                "created_at": text_entry.created_at,
+                "updated_at": text_entry.updated_at,
+                "is_human_translation": text_entry.is_human_translation,
+                "apikey_requested": text_entry.apikey_requested
+            }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"Get translation error: {str(e)}")
+        raise HTTPException(status_code=500, detail="Internal server error")
+
+@app.get("/api/translation/{translation_id}/download")
+async def download_translation_csv(
+    translation_id: int,
+    db: Session = Depends(get_db),
+    api_key: str = Header(..., alias="X-API-Key")
+):
+    """
+    Download CSV file for bulk translations
+    """
+    try:
+        # Validate the API key
+        db_key = db.query(APIKey).filter(
+            APIKey.key == api_key,
+            APIKey.is_active == True
+        ).first()
+        
+        if not db_key:
+            raise HTTPException(
+                status_code=401,
+                detail="Invalid API Key"
+            )
+        
+        # Get CSV translation from TranslationRequest table
+        translation_request = db.query(TranslationRequest)\
+            .filter(TranslationRequest.id == translation_id)\
+            .first()
+        
+        if not translation_request:
+            raise HTTPException(status_code=404, detail="CSV translation not found")
+        
+        if not translation_request.csv_file:
+            raise HTTPException(status_code=404, detail="CSV file not available")
+        
+        # Return the CSV file for download
+        return StreamingResponse(
+            io.BytesIO(translation_request.csv_file),
+            media_type="text/csv",
+            headers={"Content-Disposition": f"attachment; filename=translation_{translation_id}.csv"}
+        )
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"Download CSV error: {str(e)}")
+        raise HTTPException(status_code=500, detail="Internal server error")
+
+@app.get("/api/translations/")
+async def list_user_translations(
+    translation_type: str = Query("all", pattern="^(all|text|csv)$"),
+    limit: int = Query(50, le=100),
+    offset: int = Query(0, ge=0),
+    db: Session = Depends(get_db),
+    api_key: str = Header(..., alias="X-API-Key")
+):
+    """
+    List all translations for the authenticated user
+    """
+    try:
+        # Validate the API key
+        db_key = db.query(APIKey).filter(
+            APIKey.key == api_key,
+            APIKey.is_active == True
+        ).first()
+        
+        if not db_key:
+            raise HTTPException(
+                status_code=401,
+                detail="Invalid API Key"
+            )
+        
+        # Get the user associated with the API key
+        user = db.query(User).filter(User.api_key == api_key).first()
+        if not user:
+            raise HTTPException(
+                status_code=401,
+                detail="User not found for the provided API Key"
+            )
+        
+        result = {"text_translations": [], "csv_translations": []}
+        
+        if translation_type in ["all", "text"]:
+            # Get text translations
+            text_entries = db.query(TextEntry)\
+                .filter(TextEntry.apikey_requested == user.api_key)\
+                .order_by(TextEntry.created_at.desc())\
+                .offset(offset)\
+                .limit(limit)\
+                .all()
+            
+            for entry in text_entries:
+                # Get translations for this entry
+                translations = db.query(Translation)\
+                    .filter(Translation.text_entry_id == entry.id)\
+                    .all()
+                
+                translation_data = {}
+                for trans in translations:
+                    translation_data[trans.language] = trans.translated_text
+                
+                result["text_translations"].append({
+                    "id": entry.id,
+                    "type": "text",
+                    "translations": translation_data,
+                    "created_at": entry.created_at,
+                    "is_human_translation": entry.is_human_translation
+                })
+        
+        if translation_type in ["all", "csv"]:
+            # Get CSV translations (you may want to add user association to TranslationRequest table)
+            csv_translations = db.query(TranslationRequest)\
+                .order_by(TranslationRequest.created_at.desc())\
+                .offset(offset)\
+                .limit(limit)\
+                .all()
+            
+            for csv_trans in csv_translations:
+                result["csv_translations"].append({
+                    "id": csv_trans.id,
+                    "type": "csv",
+                    "source_language": csv_trans.source_language,
+                    "target_languages": csv_trans.target_languages.split(","),
+                    "translation_style": csv_trans.translation_style,
+                    "cost": csv_trans.cost,
+                    "created_at": csv_trans.created_at
+                })
+        
+        return result
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"List translations error: {str(e)}")
+        raise HTTPException(status_code=500, detail="Internal server error")
