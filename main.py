@@ -1364,45 +1364,61 @@ async def demo_translate(
     text: str = Form(...),
     source_language: Language = Form(...),
     target_language: Language = Form(...),
+    demo_token: str = Form(...),  # Add demo token
     db: Session = Depends(get_db)
 ):
     """
     Demo translation endpoint - No API key required
     Restrictions: 
     - Only 32 characters max
-    - Only from server IP: 68.65.122.132 (where the page is hosted)
+    - Only from authorized homepage
     - Single target language only
     """
-    # Get the server's public IP address
-    import socket
-    import requests
     
-    try:
-        # Method 1: Try to get external IP using a service
-        try:
-            response = requests.get('https://api.ipify.org', timeout=5)
-            server_ip = response.text.strip()
-        except:
-            # Method 2: Fallback - get local IP (might not be public IP)
-            hostname = socket.gethostname()
-            server_ip = socket.gethostbyname(hostname)
-    except Exception:
-        # Method 3: Final fallback - assume localhost
-        server_ip = "127.0.0.1"
+    # Define your allowed domains (where your homepage is hosted)
+    ALLOWED_DOMAINS = [
+        "polytransai.com",
+        "www.polytransai.com"  # For development
+    ]
     
-    allowed_ip = "54.227.3.30"
+    # Demo token validation (generated on your homepage)
+    DEMO_SECRET = os.getenv("DEMO_SECRET")
     
-    # Check if the server is running from the allowed IP
-    if server_ip != allowed_ip and server_ip != "127.0.0.1":  # Allow localhost for development
+    # Check referer header
+    referer = request.headers.get("referer", "")
+    origin = request.headers.get("origin", "")
+    
+    # Validate that request comes from allowed domain
+    valid_referer = False
+    valid_origin = False
+    
+    for domain in ALLOWED_DOMAINS:
+        if domain in referer or referer.startswith(f"https://{domain}") or referer.startswith(f"http://{domain}"):
+            valid_referer = True
+            break
+        if domain in origin or origin == f"https://{domain}" or origin == f"http://{domain}":
+            valid_origin = True
+            break
+    
+    if not (valid_referer or valid_origin):
         raise HTTPException(
             status_code=403,
-            detail=f"Demo access restricted. Server IP: {server_ip} is not authorized. This demo only works when hosted on {allowed_ip}."
+            detail=f"Demo access restricted. Request must come from authorized homepage. Referer: {referer}"
         )
     
-    # For development/testing, you might want to allow localhost
-    # Remove this condition in production
-    if server_ip == "127.0.0.1":
-        print(f"Development mode: Server IP is {server_ip}, allowing demo access")
+    # Validate demo token (time-based or simple hash)
+    import hashlib
+    import time
+    
+    # Generate expected token (valid for current hour)
+    current_hour = int(time.time() // 3600)
+    expected_token = hashlib.md5(f"{DEMO_SECRET}_{current_hour}".encode()).hexdigest()[:16]
+    
+    if demo_token != expected_token:
+        raise HTTPException(
+            status_code=403,
+            detail="Invalid demo token. Please refresh the page and try again."
+        )
     
     # Check character limit
     if len(text) > 32:
@@ -1444,7 +1460,7 @@ async def demo_translate(
         
         # Log demo usage (optional - for analytics)
         demo_log = TextEntry(
-            apikey_requested=f"DEMO_USER_FROM_{server_ip}",
+            apikey_requested=f"DEMO_USER_{referer}",
             is_human_translation=False
         )
         db.add(demo_log)
@@ -1470,8 +1486,7 @@ async def demo_translate(
             "target_language": target_language.value,
             "translated_text": translated_text,
             "character_limit": "32 characters max",
-            "note": "This is a demo. Sign up for full API access with unlimited translations.",
-            "server_info": f"Demo served from IP: {server_ip}"
+            "note": "This is a demo. Sign up for full API access with unlimited translations."
         }
     
     except Exception as e:
