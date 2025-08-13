@@ -52,7 +52,7 @@ SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 Base = declarative_base()
 
 # Master API Key for administration
-MASTER_API_KEY = os.getenv("MASTER_API_KEY", "master-key-change-this")
+MASTER_API_KEY = os.getenv("MASTER_API_KEY", "299560cafe16094f3174158f8d68e7162662bf93")
 
 # Define valid languages
 class Language(str, Enum):
