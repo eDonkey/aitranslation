@@ -1364,7 +1364,6 @@ async def demo_translate(
     text: str = Form(...),
     source_language: Language = Form(...),
     target_language: Language = Form(...),
-    demo_token: str = Form(...),  # Add demo token
     db: Session = Depends(get_db)
 ):
     """
@@ -1414,11 +1413,11 @@ async def demo_translate(
     current_hour = int(time.time() // 3600)
     expected_token = hashlib.md5(f"{DEMO_SECRET}_{current_hour}".encode()).hexdigest()[:16]
     
-    if demo_token != expected_token:
-        raise HTTPException(
-            status_code=403,
-            detail="Invalid demo token. Please refresh the page and try again."
-        )
+    # if demo_token != expected_token:
+    #     raise HTTPException(
+    #         status_code=403,
+    #         detail="Invalid demo token. Please refresh the page and try again."
+    #     )
     
     # Check character limit
     if len(text) > 32:
