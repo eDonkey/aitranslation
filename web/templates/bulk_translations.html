@@ -1,0 +1,189 @@
+{% extends "base.html" %}
+
+{% block title %}Human Translations Dashboard{% endblock %}
+
+{% block content %}
+<div class="bulk-translation-manager">
+  <h2>Bulk Translation Manager</h2>
+
+  <!-- Upload Form -->
+  <div class="upload-form">
+    <h3>Submit a New Bulk Translation</h3>
+    <form id="bulk-translation-form">
+      <div class="form-group">
+        <label for="csv-file">Upload CSV File:</label>
+        <input type="file" id="csv-file" name="file" />
+      </div>
+      <div class="form-group">
+        <label for="source-language">Source Language:</label>
+        <select id="source-language" name="source_language">
+          <option value="english">English</option>
+          <option value="spanish">Spanish</option>
+          <option value="portuguese">Portuguese</option>
+          <option value="french">French</option>
+          <option value="deutch">Deutch</option>
+          <option value="italian">Italian</option>
+          <option value="filipino">Filipino</option>
+        </select>
+      </div>
+      <div class="form-group">
+        <label>Target Languages:</label>
+        <div id="target-languages">
+          <label><input type="checkbox" value="english" /> English</label>
+          <label><input type="checkbox" value="spanish" /> Spanish</label>
+          <label><input type="checkbox" value="portuguese" /> Portuguese</label>
+          <label><input type="checkbox" value="french" /> French</label>
+          <label><input type="checkbox" value="deutch" /> Deutch</label>
+          <label><input type="checkbox" value="italian" /> Italian</label>
+          <label><input type="checkbox" value="filipino" /> Filipino</label>
+        </div>
+      </div>
+      <div class="form-group">
+        <label for="translation-style">Translation Style (Optional):</label>
+        <input
+          type="text"
+          id="translation-style"
+          name="translation_style"
+          placeholder="e.g., corporate, casual"
+        />
+      </div>
+      <button type="submit">Submit</button>
+    </form>
+  </div>
+
+  <!-- History Table -->
+  <div class="history-table">
+    <h3>Translation History</h3>
+    <table id="translation-history">
+      <thead>
+        <tr>
+          <th>ID</th>
+          <th>Source Language</th>
+          <th>Target Languages</th>
+          <th>Status</th>
+          <th>Cost</th>
+          <th>Created At</th>
+          <th>Actions</th>
+        </tr>
+      </thead>
+      <tbody>
+        <!-- History rows will be dynamically added here -->
+      </tbody>
+    </table>
+  </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+    document.addEventListener("DOMContentLoaded", () => {
+  const form = document.getElementById("bulk-translation-form");
+  const historyTableBody = document.querySelector("#translation-history tbody");
+
+  // Fetch translation history on page load
+  fetchTranslationHistory();
+
+  // Handle form submission
+  form.addEventListener("submit", async (e) => {
+    e.preventDefault();
+
+    const fileInput = document.getElementById("csv-file");
+    const sourceLanguage = document.getElementById("source-language").value;
+    const translationStyle = document.getElementById("translation-style").value;
+    const targetLanguages = Array.from(
+      document.querySelectorAll("#target-languages input:checked")
+    ).map((checkbox) => checkbox.value);
+
+    if (!fileInput.files.length || targetLanguages.length === 0) {
+      alert("Please upload a file and select at least one target language.");
+      return;
+    }
+
+    const formData = new FormData();
+    formData.append("file", fileInput.files[0]);
+    formData.append("source_language", sourceLanguage);
+    targetLanguages.forEach((lang) => formData.append("target_languages", lang));
+    formData.append("translation_style", translationStyle);
+
+    try {
+      const response = await fetch("/translate-csv", {
+        method: "POST",
+        headers: { "X-API-Key": "YOUR_API_KEY" },
+        body: formData,
+      });
+
+      if (response.ok) {
+        alert("Translation request submitted successfully!");
+        fetchTranslationHistory(); // Refresh history
+      } else {
+        alert("Failed to submit translation request.");
+      }
+    } catch (error) {
+      console.error("Error submitting translation request:", error);
+    }
+  });
+
+  // Fetch translation history
+  async function fetchTranslationHistory() {
+    try {
+      const response = await fetch("/bulk-translations", {
+        method: "GET",
+        headers: {
+          "Authorization": `Bearer ${localStorage.getItem("access_token")}`, // Replace with your token retrieval logic
+        },
+      });
+      const history = await response.json();
+
+      // Clear existing rows
+      historyTableBody.innerHTML = "";
+
+      // Populate table with history
+      history.forEach((item) => {
+        const row = document.createElement("tr");
+        row.innerHTML = `
+          <td>${item.id}</td>
+          <td>${item.source_language}</td>
+          <td>${item.target_languages}</td>
+          <td>${item.status}</td>
+          <td>$${item.cost.toFixed(2)}</td>
+          <td>${new Date(item.created_at).toLocaleString()}</td>
+          <td>
+            ${
+              item.status === "Completed"
+                ? `<button onclick="downloadCSV(${item.id})">Download</button>`
+                : `<span>${item.status}</span>`
+            }
+          </td>
+        `;
+        historyTableBody.appendChild(row);
+      });
+    } catch (error) {
+      console.error("Error fetching translation history:", error);
+    }
+  }
+
+  // Download CSV
+  window.downloadCSV = async (id) => {
+    try {
+      const response = await fetch(`/bulk-translation/${id}/download`, {
+        headers: { "X-API-Key": "YOUR_API_KEY" },
+      });
+
+      if (response.ok) {
+        const blob = await response.blob();
+        const url = window.URL.createObjectURL(blob);
+        const link = document.createElement("a");
+        link.href = url;
+        link.setAttribute("download", `translation_${id}.csv`);
+        document.body.appendChild(link);
+        link.click();
+      } else {
+        alert("Failed to download CSV.");
+      }
+    } catch (error) {
+      console.error("Error downloading CSV:", error);
+    }
+  };
+});
+</script>
+{% endblock %}

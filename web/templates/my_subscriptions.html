@@ -1,0 +1,35 @@
+{% extends "public_base.html" %}
+
+{% block title %}My Subscriptions{% endblock %}
+
+{% block content %}
+<div class="table-container">
+    <h1 class="text-center mb-4">My Subscriptions</h1>
+    <table class="table table-hover">
+        <thead>
+            <tr>
+                <th>Subscription Name</th>
+                <th>Price</th>
+                <th>Start Date</th>
+                <th>Renew Date</th>
+                <th>Status</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for subscription in subscriptions %}
+            <tr>
+                <td>{{ subscription.subscription.name }}</td>
+                <td>${{ subscription.subscription.price }}</td>
+                <td>{{ subscription.start_date.strftime('%Y-%m-%d') }}</td>
+                <td>{{ subscription.renew_date.strftime('%Y-%m-%d') if subscription.renew_date else 'N/A' }}</td>
+                <td>
+                    <span class="badge {% if subscription.is_active %}bg-success{% else %}bg-danger{% endif %}">
+                        {% if subscription.is_active %}Active{% else %}Inactive{% endif %}
+                    </span>
+                </td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+</div>
+{% endblock %}

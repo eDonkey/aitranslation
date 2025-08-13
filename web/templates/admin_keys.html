@@ -1,0 +1,109 @@
+{% extends "base.html" %}
+
+{% block title %}API Management{% endblock %}
+
+{% block content %}
+<body class="admin-keys">
+    <h1>API Management</h1>
+
+    <table id="api-keys-table">
+        <thead>
+            <tr>
+                <th>ID</th>
+                <th>API Key</th>
+                <th>Name</th>
+                <th>Status</th>
+                <th>Actions</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for key in api_keys %}
+            <tr>
+                <td>{{ key.id }}</td>
+                <td>{{ key.key }}</td>
+                <td>{{ key.name }}</td>
+                <td>{{ "Active" if key.is_active else "Blocked" }}</td>
+                <td>
+                    <button onclick="toggleApiKeyStatus('{{ key.id }}')">
+                        {{ "Block" if key.is_active else "Unblock" }}
+                    </button>
+                    <button class="info-button" data-key-id="{{ key.id }}">+ INFO</button>
+                    <div class="tooltip-content" id="tooltip-{{ key.id }}" style="display: none;">
+                        Loading stats...
+                    </div>
+                </td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+</body>
+
+<script>
+    let activeTooltip = null; // Track the currently active tooltip
+
+    document.querySelectorAll('.info-button').forEach(button => {
+        button.addEventListener('click', async function () {
+            const keyId = this.getAttribute('data-key-id');
+            const tooltipContent = document.getElementById(`tooltip-${keyId}`);
+
+            // Close the currently active tooltip if it's not the same as the clicked one
+            if (activeTooltip && activeTooltip !== tooltipContent) {
+                activeTooltip.style.display = "none";
+                activeTooltip = null;
+            }
+
+            // Toggle the visibility of the clicked tooltip
+            if (tooltipContent.style.display === "block") {
+                tooltipContent.style.display = "none";
+                activeTooltip = null;
+                return;
+            }
+
+            // Fetch stats if not already loaded
+            if (tooltipContent.textContent.trim() === "Loading stats...") {
+                try {
+                    const response = await fetch(`/api/admin/api-keys/${keyId}/stats`);
+                    if (!response.ok) {
+                        throw new Error("Failed to fetch stats");
+                    }
+                    const stats = await response.json();
+                    tooltipContent.textContent = `
+                        Name: ${stats.name}
+                        Usage Count: ${stats.usage_count}
+                        Last Used: ${stats.last_used || "Never"}
+                    `;
+                } catch (error) {
+                    console.error("Error fetching stats:", error);
+                    tooltipContent.textContent = "Error loading stats.";
+                }
+            }
+
+            // Show the tooltip and set it as the active one
+            tooltipContent.style.display = "block";
+            activeTooltip = tooltipContent;
+        });
+    });
+
+    // Close the tooltip when clicking outside
+    document.addEventListener('click', function (event) {
+        if (activeTooltip && !event.target.closest('.info-button') && !event.target.closest('.tooltip-content')) {
+            activeTooltip.style.display = "none";
+            activeTooltip = null;
+        }
+    });
+
+    // Toggle API key status
+    async function toggleApiKeyStatus(keyId) {
+        try {
+            const response = await fetch(`/api/admin/api-keys/${keyId}/toggle`, {
+                method: 'PUT',
+            });
+            const result = await response.json();
+            alert(result.message);
+            location.reload(); // Reload the page to reflect changes
+        } catch (error) {
+            alert("Error toggling API key status.");
+        }
+    }
+</script>
+{% endblock %}

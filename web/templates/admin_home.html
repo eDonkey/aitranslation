@@ -1,0 +1,79 @@
+{% extends "base.html" %}
+
+{% block title %}Admin Home{% endblock %}
+
+{% block content %}
+<div class="row">
+    <div class="col-md-12">
+        <h1>Admin Dashboard</h1>
+        <div class="card">
+            <div class="card-body">
+                <h5 class="card-title">System Statistics</h5>
+                <div id="statistics">Loading...</div>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+document.addEventListener('DOMContentLoaded', async function() {
+    const adminKey = localStorage.getItem('adminKey');
+    if (!adminKey) {
+        const key = prompt('Please enter admin key:');
+        if (key) {
+            localStorage.setItem('adminKey', key);
+        }
+    }
+
+    async function loadStatistics() {
+        try {
+            const response = await fetch('/api/admin/statistics', {
+                headers: {
+                    'X-Admin-Key': localStorage.getItem('adminKey')
+                }
+            });
+            const data = await response.json();
+            
+            document.getElementById('statistics').innerHTML = `
+                <div class="row">
+                    <div class="col-md-4">
+                        <div class="card">
+                            <div class="card-body">
+                                <h6>Total API Keys</h6>
+                                <h2>${data.total_keys}</h2>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="col-md-4">
+                        <div class="card">
+                            <div class="card-body">
+                                <h6>Total Translations</h6>
+                                <h2>${data.total_translations}</h2>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="col-md-4">
+                        <div class="card">
+                            <div class="card-body">
+                                <h6>Active Today</h6>
+                                <h2>${data.active_today}</h2>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            `;
+        } catch (error) {
+            document.getElementById('statistics').innerHTML = `
+                <div class="alert alert-danger">
+                    Error loading statistics: ${error.message}
+                </div>
+            `;
+        }
+    }
+
+    loadStatistics();
+});
+</script>
+{% endblock %}

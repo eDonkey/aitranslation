@@ -1,0 +1,173 @@
+{% extends "base.html" %}
+
+{% block title %}Human Translations Dashboard{% endblock %}
+
+{% block content %}
+<div class="row">
+    <div class="col-md-12">
+        <h1>Human Translations Dashboard</h1>
+        
+        <div class="card mb-4">
+            <div class="card-body">
+                <h5 class="card-title">Pending Translations</h5>
+                <div id="pendingTranslations">Loading...</div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Translation Modal -->
+<div class="modal fade" id="translationModal" tabindex="-1">
+    <div class="modal-dialog modal-lg">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title">Add Translation</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+            </div>
+            <div class="modal-body">
+                <form id="translationForm">
+                    <input type="hidden" id="entryId">
+                    <div class="mb-3">
+                        <label class="form-label">Original Text:</label>
+                        <p id="originalText" class="form-control-plaintext"></p>
+                        <small id="originalLanguage" class="text-muted"></small>
+                    </div>
+
+                    <div class="mb-3">
+                        <label for="targetLanguage" class="form-label">Target Language:</label>
+                        <select class="form-select" id="targetLanguage" required>
+                            <option value="english">English</option>
+                            <option value="spanish">Spanish</option>
+                            <option value="portuguese">Portuguese</option>
+                            <option value="french">French</option>
+                            <option value="deutch">Deutch</option>
+                            <option value="italian">Italian</option>
+                        </select>
+                    </div>
+
+                    <div class="mb-3">
+                        <label for="translatedText" class="form-label">Translation:</label>
+                        <textarea class="form-control" id="translatedText" rows="4" required></textarea>
+                    </div>
+                </form>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Close</button>
+                <button type="button" class="btn btn-primary" onclick="saveTranslation()">Save Translation</button>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+document.addEventListener('DOMContentLoaded', async function() {
+    const adminKey = localStorage.getItem('adminKey');
+    if (!adminKey) {
+        const key = prompt('Please enter admin key:');
+        if (key) {
+            localStorage.setItem('adminKey', key);
+        }
+    }
+    
+    await loadPendingTranslations();
+});
+
+async function loadPendingTranslations() {
+    try {
+        const response = await fetch('/admin/pending-translations', {
+            headers: {
+                'X-Admin-Key': localStorage.getItem('adminKey')
+            }
+        });
+        
+        if (!response.ok) throw new Error('Failed to load translations');
+        
+        const translations = await response.json();
+        const container = document.getElementById('pendingTranslations');
+        
+        if (translations.length === 0) {
+            container.innerHTML = '<div class="alert alert-info">No pending translations</div>';
+            return;
+        }
+
+        container.innerHTML = `
+            <div class="table-responsive">
+                <table class="table">
+                    <thead>
+                        <tr>
+                            <th>ID</th>
+                            <th>Original Language</th>
+                            <th>Text</th>
+                            <th>Missing Translations</th>
+                            <th>Actions</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        ${translations.map(t => `
+                            <tr>
+                                <td>${t.id}</td>
+                                <td>${t.original_language}</td>
+                                <td>${t.text.substring(0, 100)}${t.text.length > 100 ? '...' : ''}</td>
+                                <td>${t.missing_translations.join(', ')}</td>
+                                <td>
+                                    <button class="btn btn-primary btn-sm" 
+                                            onclick="openTranslationModal(${t.id}, '${t.original_language}', '${t.text.replace(/'/g, "\\'")}')">
+                                        Add Translation
+                                    </button>
+                                </td>
+                            </tr>
+                        `).join('')}
+                    </tbody>
+                </table>
+            </div>
+        `;
+    } catch (error) {
+        document.getElementById('pendingTranslations').innerHTML = `
+            <div class="alert alert-danger">
+                Error loading translations: ${error.message}
+            </div>
+        `;
+    }
+}
+
+function openTranslationModal(id, originalLang, text) {
+    document.getElementById('entryId').value = id;
+    document.getElementById('originalText').textContent = text;
+    document.getElementById('originalLanguage').textContent = `Original language: ${originalLang}`;
+    
+    const modal = new bootstrap.Modal(document.getElementById('translationModal'));
+    modal.show();
+}
+
+async function saveTranslation() {
+    try {
+        const entryId = document.getElementById('entryId').value;
+        const targetLanguage = document.getElementById('targetLanguage').value;
+        const translatedText = document.getElementById('translatedText').value;
+
+        const response = await fetch(`/admin/translations/${entryId}`, {
+            method: 'POST',
+            headers: {
+                'X-Admin-Key': localStorage.getItem('adminKey'),
+                'Content-Type': 'application/json'
+            },
+            body: JSON.stringify({
+                language: targetLanguage,
+                text: translatedText
+            })
+        });
+
+        if (!response.ok) throw new Error('Failed to save translation');
+
+        bootstrap.Modal.getInstance(document.getElementById('translationModal')).hide();
+        document.getElementById('translationForm').reset();
+        await loadPendingTranslations();
+
+    } catch (error) {
+        alert('Error saving translation: ' + error.message);
+    }
+}
+</script>
+{% endblock %}
