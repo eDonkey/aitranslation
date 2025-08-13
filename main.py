@@ -1370,18 +1370,39 @@ async def demo_translate(
     Demo translation endpoint - No API key required
     Restrictions: 
     - Only 32 characters max
-    - Only from IP: 68.65.122.132
+    - Only from server IP: 68.65.122.132 (where the page is hosted)
     - Single target language only
     """
-    # Check IP restriction
-    client_ip = request.client.host
+    # Get the server's public IP address
+    import socket
+    import requests
+    
+    try:
+        # Method 1: Try to get external IP using a service
+        try:
+            response = requests.get('https://api.ipify.org', timeout=5)
+            server_ip = response.text.strip()
+        except:
+            # Method 2: Fallback - get local IP (might not be public IP)
+            hostname = socket.gethostname()
+            server_ip = socket.gethostbyname(hostname)
+    except Exception:
+        # Method 3: Final fallback - assume localhost
+        server_ip = "127.0.0.1"
+    
     allowed_ip = "68.65.122.132"
     
-    if client_ip != allowed_ip:
+    # Check if the server is running from the allowed IP
+    if server_ip != allowed_ip and server_ip != "127.0.0.1":  # Allow localhost for development
         raise HTTPException(
             status_code=403,
-            detail=f"Demo access restricted. Your IP: {client_ip} is not authorized."
+            detail=f"Demo access restricted. Server IP: {server_ip} is not authorized. This demo only works when hosted on {allowed_ip}."
         )
+    
+    # For development/testing, you might want to allow localhost
+    # Remove this condition in production
+    if server_ip == "127.0.0.1":
+        print(f"Development mode: Server IP is {server_ip}, allowing demo access")
     
     # Check character limit
     if len(text) > 32:
@@ -1423,7 +1444,7 @@ async def demo_translate(
         
         # Log demo usage (optional - for analytics)
         demo_log = TextEntry(
-            apikey_requested="DEMO_USER",
+            apikey_requested=f"DEMO_USER_FROM_{server_ip}",
             is_human_translation=False
         )
         db.add(demo_log)
@@ -1449,7 +1470,8 @@ async def demo_translate(
             "target_language": target_language.value,
             "translated_text": translated_text,
             "character_limit": "32 characters max",
-            "note": "This is a demo. Sign up for full API access with unlimited translations."
+            "note": "This is a demo. Sign up for full API access with unlimited translations.",
+            "server_info": f"Demo served from IP: {server_ip}"
         }
     
     except Exception as e:
