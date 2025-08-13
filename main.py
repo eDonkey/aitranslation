@@ -22,6 +22,11 @@ import csv
 from fastapi import File, UploadFile
 from fastapi.responses import StreamingResponse
 import asyncio
+import smtplib
+import ssl
+from email.message import EmailMessage
+from email.utils import make_msgid
+from datetime import datetime
 
 logger = logging.getLogger("uvicorn.error")
 
@@ -637,13 +642,37 @@ async def create_user(
     db.commit()
     db.refresh(new_user)
     
+    # Send welcome email with API key
+    try:
+        html_content = generate_welcome_email_html(user.username, api_key, user.email)
+        text_content = generate_welcome_email_text(user.username, api_key, user.email)
+        
+        email_sent = await send_email(
+            to_email=user.email,
+            subject=f"Welcome to PolyTransAI - Your API Key Inside",
+            html_content=html_content,
+            text_content=text_content
+        )
+        
+        if email_sent:
+            logger.info(f"Welcome email sent successfully to {user.email}")
+            email_status = "sent"
+        else:
+            logger.error(f"Failed to send welcome email to {user.email}")
+            email_status = "failed"
+            
+    except Exception as e:
+        logger.error(f"Error sending welcome email to {user.email}: {str(e)}")
+        email_status = "error"
+    
     return {
         "id": new_user.id,
         "username": new_user.username,
         "email": new_user.email,
         "is_active": new_user.is_active,
         "api_key": api_key,
-        "created_at": new_user.created_at
+        "created_at": new_user.created_at,
+        "email_status": email_status
     }
 
 @app.get("/api/admin/users/")
@@ -1493,3 +1522,289 @@ async def demo_translate(
             status_code=500,
             detail=f"Demo translation failed: {str(e)}"
         )
+
+# Add email configuration after your other configurations
+EMAIL_HOST = os.getenv("EMAIL_HOST", "polytransai.com")
+EMAIL_PORT = int(os.getenv("EMAIL_PORT", "465"))
+EMAIL_USERNAME = os.getenv("EMAIL_USERNAME", "apimgmt-donotreply@polytransai.com")
+EMAIL_PASSWORD = os.getenv("EMAIL_PASSWORD")
+EMAIL_USE_TLS = os.getenv("EMAIL_USE_TLS", "true").lower() == "true"
+FROM_EMAIL = os.getenv("FROM_EMAIL", "apimgmt-donotreply@polytransai.com")
+FROM_NAME = os.getenv("FROM_NAME", "PolyTransAI")
+
+async def send_email(to_email: str, subject: str, html_content: str, text_content: str = None):
+    """
+    Send email using SMTP with SSL
+    """
+    try:
+        # Create message
+        msg = EmailMessage()
+        msg['Subject'] = subject
+        msg['From'] = f"{FROM_NAME} <{FROM_EMAIL}>"
+        msg['To'] = to_email
+        
+        # Set content
+        if text_content:
+            msg.set_content(text_content)
+        
+        # Add HTML content
+        msg.add_alternative(html_content, subtype='html')
+        
+        # Since you're using port 465, use SSL
+        if EMAIL_PORT == 465:
+            # SSL connection
+            context = ssl.create_default_context()
+            with smtplib.SMTP_SSL(EMAIL_HOST, EMAIL_PORT, context=context) as server:
+                if EMAIL_PASSWORD:
+                    server.login(EMAIL_USERNAME, EMAIL_PASSWORD)
+                server.send_message(msg)
+        else:
+            # TLS connection (port 587)
+            with smtplib.SMTP(EMAIL_HOST, EMAIL_PORT) as server:
+                if EMAIL_USE_TLS:
+                    server.starttls()
+                if EMAIL_PASSWORD:
+                    server.login(EMAIL_USERNAME, EMAIL_PASSWORD)
+                server.send_message(msg)
+        
+        return True
+        
+    except Exception as e:
+        print(f"Failed to send email to {to_email}: {str(e)}")
+        return False
+
+def generate_welcome_email_html(username: str, api_key: str, email: str) -> str:
+    """
+    Generate welcome email HTML content
+    """
+    current_date = datetime.utcnow().strftime('%B %d, %Y at %I:%M %p UTC')
+    
+    return f"""
+    <!DOCTYPE html>
+    <html lang="en">
+    <head>
+        <meta charset="UTF-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <title>Welcome to PolyTransAI</title>
+        <style>
+            body {{
+                font-family: Arial, sans-serif;
+                line-height: 1.6;
+                color: #333;
+                max-width: 600px;
+                margin: 0 auto;
+                padding: 20px;
+                background-color: #f4f4f4;
+            }}
+            .container {{
+                background-color: white;
+                padding: 30px;
+                border-radius: 10px;
+                box-shadow: 0 0 20px rgba(0,0,0,0.1);
+            }}
+            .header {{
+                text-align: center;
+                margin-bottom: 30px;
+                padding-bottom: 20px;
+                border-bottom: 2px solid #007bff;
+            }}
+            .logo {{
+                font-size: 28px;
+                font-weight: bold;
+                color: #007bff;
+                margin-bottom: 10px;
+            }}
+            .api-key-box {{
+                background-color: #f8f9fa;
+                border: 2px solid #007bff;
+                padding: 20px;
+                border-radius: 8px;
+                margin: 20px 0;
+                text-align: center;
+            }}
+            .api-key {{
+                font-family: 'Courier New', monospace;
+                font-size: 16px;
+                font-weight: bold;
+                color: #dc3545;
+                background-color: #fff;
+                padding: 10px;
+                border-radius: 5px;
+                border: 1px solid #ddd;
+                word-break: break-all;
+            }}
+            .warning {{
+                background-color: #fff3cd;
+                border: 1px solid #ffeaa7;
+                padding: 15px;
+                border-radius: 5px;
+                margin: 20px 0;
+            }}
+            .cta-button {{
+                display: inline-block;
+                background-color: #007bff;
+                color: white;
+                padding: 12px 30px;
+                text-decoration: none;
+                border-radius: 5px;
+                margin: 20px 10px;
+                font-weight: bold;
+            }}
+            .footer {{
+                margin-top: 40px;
+                padding-top: 20px;
+                border-top: 1px solid #ddd;
+                font-size: 14px;
+                color: #666;
+                text-align: center;
+            }}
+            .code-example {{
+                background-color: #f8f9fa;
+                border-left: 4px solid #007bff;
+                padding: 15px;
+                margin: 15px 0;
+                font-family: 'Courier New', monospace;
+                font-size: 14px;
+                overflow-x: auto;
+            }}
+        </style>
+    </head>
+    <body>
+        <div class="container">
+            <div class="header">
+                <div class="logo">🌐 PolyTransAI</div>
+                <p>AI-Powered Translation API</p>
+            </div>
+            
+            <h2>Welcome to PolyTransAI, {username}!</h2>
+            
+            <p>Thank you for joining PolyTransAI! Your account has been successfully created and you're ready to start translating content with our powerful AI-driven translation API.</p>
+            
+            <div class="api-key-box">
+                <h3>🔑 Your API Key</h3>
+                <p>Here's your unique API key. Keep it secure and never share it publicly:</p>
+                <div class="api-key">{api_key}</div>
+            </div>
+            
+            <div class="warning">
+                <strong>⚠️ Important Security Notice:</strong>
+                <ul>
+                    <li>Never share your API key publicly or commit it to version control</li>
+                    <li>Store it securely in environment variables</li>
+                    <li>If compromised, contact us immediately for a replacement</li>
+                    <li>This key is tied to your account and usage will be tracked</li>
+                </ul>
+            </div>
+            
+            <h3>🚀 Getting Started</h3>
+            <p>You can start using the API immediately! Here's a quick example:</p>
+            
+            <div class="code-example">
+curl -X POST "https://polytransai.com/translate-text/" \\<br>
+&nbsp;&nbsp;-H "X-API-Key: {api_key}" \\<br>
+&nbsp;&nbsp;-F "text=Hello world" \\<br>
+&nbsp;&nbsp;-F "source_language=english" \\<br>
+&nbsp;&nbsp;-F "target_languages=spanish"
+            </div>
+            
+            <h3>📚 What you can do:</h3>
+            <ul>
+                <li><strong>Text Translation:</strong> Translate individual texts between 9+ languages</li>
+                <li><strong>CSV Batch Processing:</strong> Upload CSV files for bulk translations</li>
+                <li><strong>Multiple Target Languages:</strong> Translate to multiple languages in one request</li>
+                <li><strong>Custom Styles:</strong> Specify translation styles (formal, casual, technical)</li>
+                <li><strong>Usage Tracking:</strong> Monitor your API usage and costs</li>
+            </ul>
+            
+            <div style="text-align: center;">
+                <a href="https://polytransai.com/docs.html" class="cta-button">📖 Read Documentation</a>
+            </div>
+            
+            <h3>🌍 Supported Languages:</h3>
+            <p>English, Spanish, Portuguese, French, German, Italian, Filipino, Japanese, Vietnamese</p>
+            
+            <h3>💡 Need Help?</h3>
+            <p>If you have any questions or need assistance:</p>
+            <ul>
+                <li>📖 Check our <a href="https://polytransai.com/docs.html">documentation</a></li>
+                <li>💬 Contact support: <a href="mailto:support@polytransai.com">support@polytransai.com</a></li>
+            </ul>
+            
+            <div class="footer">
+                <p><strong>Account Details:</strong></p>
+                <p>Username: {username}<br>
+                Email: {email}<br>
+                Account Created: {current_date}</p>
+                
+                <p style="margin-top: 20px;">
+                    Best regards,<br>
+                    The PolyTransAI Team
+                </p>
+                
+                <p style="font-size: 12px; color: #999; margin-top: 30px;">
+                    This email was sent to {email} because an account was created for you on PolyTransAI.<br>
+                    If you didn't request this account, please contact us immediately.
+                </p>
+            </div>
+        </div>
+    </body>
+    </html>
+    """
+
+def generate_welcome_email_text(username: str, api_key: str, email: str) -> str:
+    """
+    Generate welcome email text content (fallback for email clients that don't support HTML)
+    """
+    current_date = datetime.utcnow().strftime('%B %d, %Y at %I:%M %p UTC')
+    
+    return f"""
+Welcome to PolyTransAI, {username}!
+
+Thank you for joining PolyTransAI! Your account has been successfully created and you're ready to start translating content with our powerful AI-driven translation API.
+
+YOUR API KEY:
+{api_key}
+
+IMPORTANT SECURITY NOTICE:
+- Never share your API key publicly or commit it to version control
+- Store it securely in environment variables  
+- If compromised, contact us immediately for a replacement
+- This key is tied to your account and usage will be tracked
+
+GETTING STARTED:
+You can start using the API immediately! Here's a quick example:
+
+curl -X POST "https://polytransai.com/translate-text/" \\
+  -H "X-API-Key: {api_key}" \\
+  -F "text=Hello world" \\
+  -F "source_language=english" \\
+  -F "target_languages=spanish"
+
+WHAT YOU CAN DO:
+- Text Translation: Translate individual texts between 9+ languages
+- CSV Batch Processing: Upload CSV files for bulk translations  
+- Multiple Target Languages: Translate to multiple languages in one request
+- Custom Styles: Specify translation styles (formal, casual, technical)
+- Usage Tracking: Monitor your API usage and costs
+
+SUPPORTED LANGUAGES:
+English, Spanish, Portuguese, French, German, Italian, Filipino, Japanese, Vietnamese
+
+DOCUMENTATION: https://polytransai.com/docs.html
+
+NEED HELP?
+- Documentation: https://polytransai.com/docs.html
+- Support: support@polytransai.com  
+
+ACCOUNT DETAILS:
+Username: {username}
+Email: {email}
+Account Created: {current_date}
+
+Best regards,
+The PolyTransAI Team
+
+---
+This email was sent to {email} because an account was created for you on PolyTransAI.
+If you didn't request this account, please contact us immediately.
+    """
