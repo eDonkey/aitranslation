@@ -12,3 +12,4 @@
 *.db-trace
 postman.json
 clean.sh
+__pycache__/main.cpython-311.pyc
