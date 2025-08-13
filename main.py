@@ -1390,7 +1390,7 @@ async def demo_translate(
         # Method 3: Final fallback - assume localhost
         server_ip = "127.0.0.1"
     
-    allowed_ip = "68.65.122.132"
+    allowed_ip = "54.227.3.30"
     
     # Check if the server is running from the allowed IP
     if server_ip != allowed_ip and server_ip != "127.0.0.1":  # Allow localhost for development
