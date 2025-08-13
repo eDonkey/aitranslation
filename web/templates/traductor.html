@@ -1,282 +1,92 @@
-<!DOCTYPE html>
-<html lang="en">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Enterprise Translation Solutions</title>
-    <script src="https://code.jquery.com/jquery-3.6.0.min.js"></script>
-    <script src="https://cdn.jsdelivr.net/npm/sweetalert2@11"></script>
-    <style>
-        :root {
-            --primary: #2c3e50;
-            --secondary: #34495e;
-            --accent: #3498db;
-            --light: #ecf0f1;
-            --success: #27ae60;
-            --text: #2c3e50;
-        }
+{% extends "public_base.html" %}
 
-        * {
-            margin: 0;
-            padding: 0;
-            box-sizing: border-box;
-        }
+{% block title %}Enterprise Translation Solutions{% endblock %}
 
-        body {
-            font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
-            line-height: 1.6;
-            color: var(--text);
-        }
+{% block content %}
+<section class="hero">
+    <h1>Enterprise Translation Solutions</h1>
+    <p>Professional translation services powered by AI and human expertise for businesses that demand excellence</p>
+</section>
 
-        .hero {
-            background: linear-gradient(135deg, var(--primary), var(--secondary));
-            color: white;
-            padding: 6rem 2rem;
-            text-align: center;
-        }
-
-        .hero h1 {
-            font-size: 3rem;
-            margin-bottom: 1rem;
-        }
-
-        .hero p {
-            font-size: 1.2rem;
-            max-width: 800px;
-            margin: 0 auto;
-        }
-
-        .features {
-            padding: 4rem 2rem;
-            background: var(--light);
-        }
-
-        .features-grid {
-            display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
-            gap: 2rem;
-            max-width: 1200px;
-            margin: 0 auto;
-        }
-
-        .feature-card {
-            background: white;
-            padding: 2rem;
-            border-radius: 8px;
-            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
-        }
-
-        .services {
-            padding: 4rem 2rem;
-        }
-
-        .service-comparison {
-            display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
-            gap: 2rem;
-            max-width: 1200px;
-            margin: 2rem auto;
-        }
-
-        .service-card {
-            border: 1px solid #ddd;
-            border-radius: 8px;
-            padding: 2rem;
-            text-align: center;
-        }
-
-        .service-card.highlighted {
-            border-color: var(--accent);
-            box-shadow: 0 4px 12px rgba(52, 152, 219, 0.2);
-        }
-
-        .cta-button {
-            display: inline-block;
-            padding: 1rem 2rem;
-            background: var(--accent);
-            color: white;
-            text-decoration: none;
-            border-radius: 4px;
-            margin-top: 1rem;
-            transition: background 0.3s ease;
-        }
-
-        .cta-button:hover {
-            background: #2980b9;
-        }
-
-        .section-title {
-            text-align: center;
-            margin-bottom: 3rem;
-        }
-
-        .languages {
-            display: flex;
-            justify-content: center;
-            gap: 1rem;
-            flex-wrap: wrap;
-            margin: 2rem 0;
-        }
-
-        .language-tag {
-            background: var(--primary);
-            color: white;
-            padding: 0.5rem 1rem;
-            border-radius: 20px;
-            font-size: 0.9rem;
-        }
-
-        footer {
-            background: var(--primary);
-            color: white;
-            text-align: center;
-            padding: 2rem;
-            margin-top: 4rem;
-        }
-
-        .trial-section {
-            padding: 4rem 2rem;
-            background: var(--light);
-            margin: 2rem 0;
-        }
-
-        .trial-card {
-            background: white;
-            padding: 2rem;
-            border-radius: 8px;
-            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
-            max-width: 800px;
-            margin: 0 auto;
-        }
-
-        .form-group {
-            margin-bottom: 1rem;
-        }
-
-        .form-group label {
-            display: block;
-            margin-bottom: 0.5rem;
-            color: var(--text);
-        }
-
-        .form-control {
-            width: 100%;
-            padding: 0.75rem;
-            border: 1px solid #ddd;
-            border-radius: 4px;
-            font-size: 1rem;
-        }
-
-        .translations-grid {
-            display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
-            gap: 1rem;
-        }
-
-        .translation-item {
-            background: var(--light);
-            padding: 1rem;
-            border-radius: 0.35rem;
-        }
-
-        .badge {
-            background: var(--accent);
-            color: white;
-            padding: 0.25rem 0.5rem;
-            border-radius: 20px;
-            font-size: 0.8rem;
-        }
-    </style>
-</head>
-<body>
-    <section class="hero">
-        <h1>Enterprise Translation Solutions</h1>
-        <p>Professional translation services powered by AI and human expertise for businesses that demand excellence</p>
-    </section>
-
-    <section class="trial-section">
-        <h2 class="section-title">Try Our AI Translation for Free!</h2>
-        <div class="trial-card">
-            <form id="trialTranslationForm">
-                <div class="form-group">
-                    <label for="trialSourceText">Text to Translate</label>
-                    <textarea class="form-control" id="trialSourceText" rows="4" required></textarea>
-                </div>
-                <div class="form-group">
-                    <label for="trialSourceLanguage">Source Language</label>
-                    <select class="form-control" id="trialSourceLanguage" required>
-                        <option value="english">English</option>
-                        <option value="spanish">Spanish</option>
-                        <option value="portuguese">Portuguese</option>
-                        <option value="french">French</option>
-                        <option value="deutch">German</option>
-                        <option value="italian">Italian</option>
-                    </select>
-                </div>
-                <button type="submit" class="cta-button">Try Free Translation</button>
-            </form>
-        </div>
-    </section>
-
-    <section class="features">
-        <h2 class="section-title">Why Choose Our Platform?</h2>
-        <div class="features-grid">
-            <div class="feature-card">
-                <h3>Multi-Language Support</h3>
-                <p>Support for 6 major languages with more coming soon:</p>
-                <div class="languages">
-                    <span class="language-tag">English</span>
-                    <span class="language-tag">Spanish</span>
-                    <span class="language-tag">Portuguese</span>
-                    <span class="language-tag">French</span>
-                    <span class="language-tag">German</span>
-                    <span class="language-tag">Italian</span>
-                </div>
+<section class="trial-section">
+    <h2 class="section-title">Try Our AI Translation for Free!</h2>
+    <div class="trial-card">
+        <form id="trialTranslationForm">
+            <div class="form-group">
+                <label for="trialSourceText">Text to Translate</label>
+                <textarea class="form-control" id="trialSourceText" rows="4" required></textarea>
             </div>
-            <div class="feature-card">
-                <h3>API Integration</h3>
-                <p>Seamlessly integrate our translation services into your workflow with our robust API</p>
+            <div class="form-group">
+                <label for="trialSourceLanguage">Source Language</label>
+                <select class="form-control" id="trialSourceLanguage" required>
+                    <option value="english">English</option>
+                    <option value="spanish">Spanish</option>
+                    <option value="portuguese">Portuguese</option>
+                    <option value="french">French</option>
+                    <option value="deutch">German</option>
+                    <option value="italian">Italian</option>
+                </select>
             </div>
-            <div class="feature-card">
-                <h3>Enterprise Security</h3>
-                <p>Secure API key management and access control for your sensitive content</p>
+            <button type="submit" class="cta-button">Try Free Translation</button>
+        </form>
+    </div>
+</section>
+
+<section class="features">
+    <h2 class="section-title">Why Choose Our Platform?</h2>
+    <div class="features-grid">
+        <div class="feature-card">
+            <h3>Multi-Language Support</h3>
+            <p>Support for 6 major languages with more coming soon:</p>
+            <div class="languages">
+                <span class="language-tag">English</span>
+                <span class="language-tag">Spanish</span>
+                <span class="language-tag">Portuguese</span>
+                <span class="language-tag">French</span>
+                <span class="language-tag">German</span>
+                <span class="language-tag">Italian</span>
             </div>
         </div>
-    </section>
-
-    <section class="services">
-        <h2 class="section-title">Our Services</h2>
-        <div class="service-comparison">
-            <div class="service-card">
-                <h3>AI-Powered Translation</h3>
-                <p>Instant translations powered by advanced AI technology</p>
-                <ul style="list-style: none; margin: 1rem 0;">
-                    <li>✓ Instant delivery</li>
-                    <li>✓ Cost-effective</li>
-                    <li>✓ 24/7 availability</li>
-                    <li>✓ Ideal for high-volume content</li>
-                </ul>
-                <a href="/client" class="cta-button">Get Started</a>
-            </div>
-            <div class="service-card highlighted">
-                <h3>Human Translation</h3>
-                <p>Expert translators for your most important content</p>
-                <ul style="list-style: none; margin: 1rem 0;">
-                    <li>✓ Superior accuracy</li>
-                    <li>✓ Cultural adaptation</li>
-                    <li>✓ Context-aware translations</li>
-                    <li>✓ Perfect for legal & marketing content</li>
-                </ul>
-                <a href="/client" class="cta-button">Contact Sales</a>
-            </div>
+        <div class="feature-card">
+            <h3>API Integration</h3>
+            <p>Seamlessly integrate our translation services into your workflow with our robust API</p>
         </div>
-    </section>
+        <div class="feature-card">
+            <h3>Enterprise Security</h3>
+            <p>Secure API key management and access control for your sensitive content</p>
+        </div>
+    </div>
+</section>
 
-    <footer>
-        <p>© 2024 Enterprise Translation Solutions. All rights reserved.</p>
-    </footer>
+<section class="services">
+    <h2 class="section-title">Our Services</h2>
+    <div class="service-comparison">
+        <div class="service-card">
+            <h3>AI-Powered Translation</h3>
+            <p>Instant translations powered by advanced AI technology</p>
+            <ul style="list-style: none; margin: 1rem 0;">
+                <li>✓ Instant delivery</li>
+                <li>✓ Cost-effective</li>
+                <li>✓ 24/7 availability</li>
+                <li>✓ Ideal for high-volume content</li>
+            </ul>
+            <a href="/client" class="cta-button">Get Started</a>
+        </div>
+        <div class="service-card highlighted">
+            <h3>Human Translation</h3>
+            <p>Expert translators for your most important content</p>
+            <ul style="list-style: none; margin: 1rem 0;">
+                <li>✓ Superior accuracy</li>
+                <li>✓ Cultural adaptation</li>
+                <li>✓ Context-aware translations</li>
+                <li>✓ Perfect for legal & marketing content</li>
+            </ul>
+            <a href="/client" class="cta-button">Contact Sales</a>
+        </div>
+    </div>
+</section>
 
-    <script>
+<script>
     $(document).ready(function() {
         $('#trialTranslationForm').on('submit', function(e) {
             e.preventDefault();
@@ -340,6 +150,5 @@
             });
         });
     });
-    </script>
-</body>
-</html>
+</script>
+{% endblock %}

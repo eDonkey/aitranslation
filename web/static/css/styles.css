@@ -54,23 +54,23 @@ footer {
 }
 
 /* Styles specific to the admin dashboard */
-body.admin-dashboard {
+.admin-dashboard {
     background-color: #e9ecef;
 }
 
-body.admin-dashboard h1 {
+.admin-dashboard h1 {
     color: #007bff;
 }
 
 /* Scoped styles for admin dashboard cards */
-body.admin-dashboard .card-container {
+.admin-dashboard .card-container {
     display: grid;
-    grid-template-columns: repeat(3, 1fr); /* 3 cards per row */
-    gap: 1.5rem; /* Space between cards */
+    grid-template-columns: 20% 20% 60%; /* First two cards 20%, third card 60% */
+    gap: 1.5rem;
     margin-top: 2rem;
 }
 
-body.admin-dashboard .card {
+.admin-dashboard .card {
     background-color: #ffffff;
     border: 1px solid #ddd;
     border-radius: 8px;
@@ -79,29 +79,29 @@ body.admin-dashboard .card {
     transition: transform 0.2s ease, box-shadow 0.2s ease;
 }
 
-body.admin-dashboard .card:nth-child(1) {
+.admin-dashboard .card:nth-child(1) {
     background-color: #f8d7da; /* Light red */
 }
 
-body.admin-dashboard .card:nth-child(2) {
+.admin-dashboard .card:nth-child(2) {
     background-color: #d4edda; /* Light green */
 }
 
-body.admin-dashboard .card:nth-child(3) {
+.admin-dashboard .card:nth-child(3) {
     background-color: #d1ecf1; /* Light blue */
 }
 
-body.admin-dashboard .card:hover {
+.admin-dashboard .card:hover {
     transform: translateY(-5px);
     box-shadow: 0 6px 10px rgba(0, 0, 0, 0.15);
 }
 
-body.admin-dashboard .card h3 {
+.admin-dashboard .card h3 {
     margin-top: 0;
     color: #333;
 }
 
-body.admin-dashboard .card p {
+.admin-dashboard .card p {
     margin: 0.5rem 0;
     color: #555;
 }
@@ -381,4 +381,282 @@ body.admin-keys table td button {
 
 body.admin-keys table td button:hover {
     background-color: #0056b3;
+}
+/* homepage */
+:root {
+            --primary: #2c3e50;
+            --secondary: #34495e;
+            --accent: #3498db;
+            --light: #ecf0f1;
+            --success: #27ae60;
+            --text: #2c3e50;
+        }
+
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+            line-height: 1.6;
+            color: var(--text);
+        }
+
+        .hero {
+            background: linear-gradient(135deg, var(--primary), var(--secondary));
+            color: white;
+            padding: 6rem 2rem;
+            text-align: center;
+        }
+
+        .hero h1 {
+            font-size: 3rem;
+            margin-bottom: 1rem;
+        }
+
+        .hero p {
+            font-size: 1.2rem;
+            max-width: 800px;
+            margin: 0 auto;
+        }
+
+        .features {
+            padding: 4rem 2rem;
+            background: var(--light);
+        }
+
+        .features-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+            gap: 2rem;
+            max-width: 1200px;
+            margin: 0 auto;
+        }
+
+        .feature-card {
+            background: white;
+            padding: 2rem;
+            border-radius: 8px;
+            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+        }
+
+        .services {
+            padding: 4rem 2rem;
+        }
+
+        .service-comparison {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+            gap: 2rem;
+            max-width: 1200px;
+            margin: 2rem auto;
+        }
+
+        .service-card {
+            border: 1px solid #ddd;
+            border-radius: 8px;
+            padding: 2rem;
+            text-align: center;
+        }
+
+        .service-card.highlighted {
+            border-color: var(--accent);
+            box-shadow: 0 4px 12px rgba(52, 152, 219, 0.2);
+        }
+
+        .cta-button {
+            display: inline-block;
+            padding: 1rem 2rem;
+            background: var(--accent);
+            color: white;
+            text-decoration: none;
+            border-radius: 4px;
+            margin-top: 1rem;
+            transition: background 0.3s ease;
+        }
+
+        .cta-button:hover {
+            background: #2980b9;
+        }
+
+        .section-title {
+            text-align: center;
+            margin-bottom: 3rem;
+        }
+
+        .languages {
+            display: flex;
+            justify-content: center;
+            gap: 1rem;
+            flex-wrap: wrap;
+            margin: 2rem 0;
+        }
+
+        .language-tag {
+            background: var(--primary);
+            color: white;
+            padding: 0.5rem 1rem;
+            border-radius: 20px;
+            font-size: 0.9rem;
+        }
+
+        footer {
+            background: var(--primary);
+            color: white;
+            text-align: center;
+            padding: 2rem;
+            margin-top: 4rem;
+        }
+
+        .trial-section {
+            padding: 4rem 2rem;
+            background: var(--light);
+            margin: 2rem 0;
+        }
+
+        .trial-card {
+            background: white;
+            padding: 2rem;
+            border-radius: 8px;
+            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+            max-width: 800px;
+            margin: 0 auto;
+        }
+
+        .form-group {
+            margin-bottom: 1rem;
+        }
+
+        .form-group label {
+            display: block;
+            margin-bottom: 0.5rem;
+            color: var(--text);
+        }
+
+        .form-control {
+            width: 100%;
+            padding: 0.75rem;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            font-size: 1rem;
+        }
+
+        .translations-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+            gap: 1rem;
+        }
+
+        .translation-item {
+            background: var(--light);
+            padding: 1rem;
+            border-radius: 0.35rem;
+        }
+
+        .badge {
+            background: var(--accent);
+            color: white;
+            padding: 0.25rem 0.5rem;
+            border-radius: 20px;
+            font-size: 0.8rem;
+        }
+
+/* Table container styling */
+.table-container {
+    max-width: 1000px; /* Increase the width for a more spacious layout */
+    margin: 2rem auto; /* Center the table and add spacing */
+    padding: 1.5rem; /* Add padding around the table */
+    background-color: #ffffff; /* White background for better contrast */
+    border-radius: 12px; /* Rounded corners */
+    box-shadow: 0 6px 12px rgba(0, 0, 0, 0.15); /* Add a subtle shadow */
+}
+
+/* Table styling */
+.table {
+    width: 100%; /* Ensure the table takes up the full width of the container */
+    font-size: 1rem; /* Increase font size for better readability */
+    border-collapse: collapse; /* Remove gaps between borders */
+    border-spacing: 0;
+    overflow: hidden; /* Prevent overflow issues */
+}
+
+.table th, .table td {
+    padding: 1rem 1.5rem; /* Add more padding for spacious cells */
+    text-align: center; /* Center-align text */
+    vertical-align: middle; /* Align content vertically */
+    border-bottom: 1px solid #ddd; /* Add a subtle border between rows */
+}
+
+.table th {
+    background-color: #2c3e50; /* Dark header background */
+    color: #ffffff; /* White text for contrast */
+    font-weight: bold;
+    text-transform: uppercase; /* Make header text uppercase */
+}
+
+.table td {
+    background-color: #f9f9f9; /* Light background for table rows */
+    color: #333; /* Dark text for readability */
+}
+
+.table-hover tbody tr:hover {
+    background-color: #f1f1f1; /* Highlight row on hover */
+    transition: background-color 0.3s ease; /* Smooth hover effect */
+}
+
+/* Badge styling */
+.badge {
+    font-size: 0.9rem; /* Slightly larger font size */
+    padding: 0.6em 1em; /* Add more padding for larger badges */
+    border-radius: 20px; /* Rounded badges */
+    font-weight: bold; /* Make text bold */
+}
+
+/* Active badge */
+.badge.bg-success {
+    background-color: #28a745; /* Green for active */
+    color: #ffffff;
+}
+
+/* Inactive badge */
+.badge.bg-danger {
+    background-color: #dc3545; /* Red for inactive */
+    color: #ffffff;
+}
+.bulk-translation-manager {
+  padding: 20px;
+  background-color: #f9f9f9;
+  border-radius: 8px;
+}
+
+.upload-form,
+.history-table {
+  margin-bottom: 30px;
+}
+
+.form-group {
+  margin-bottom: 15px;
+}
+
+#target-languages label {
+  margin-right: 10px;
+}
+
+table {
+  width: 100%;
+  border-collapse: collapse;
+  margin-top: 20px;
+}
+
+table th,
+table td {
+  border: 1px solid #ddd;
+  padding: 8px;
+  text-align: left;
+}
+
+table th {
+  background-color: #f4f4f4;
 }
