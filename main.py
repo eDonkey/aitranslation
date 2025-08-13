@@ -22,6 +22,11 @@ import csv
 from fastapi import File, UploadFile
 from fastapi.responses import StreamingResponse
 import asyncio
+import smtplib
+import ssl
+from email.message import EmailMessage
+from email.utils import make_msgid
+from datetime import datetime
 
 logger = logging.getLogger("uvicorn.error")
 
@@ -637,13 +642,37 @@ async def create_user(
     db.commit()
     db.refresh(new_user)
     
+    # Send welcome email with API key
+    try:
+        html_content = generate_welcome_email_html(user.username, api_key, user.email)
+        text_content = generate_welcome_email_text(user.username, api_key, user.email)
+        
+        email_sent = await send_email(
+            to_email=user.email,
+            subject=f"Welcome to PolyTransAI - Your API Key Inside",
+            html_content=html_content,
+            text_content=text_content
+        )
+        
+        if email_sent:
+            logger.info(f"Welcome email sent successfully to {user.email}")
+            email_status = "sent"
+        else:
+            logger.error(f"Failed to send welcome email to {user.email}")
+            email_status = "failed"
+            
+    except Exception as e:
+        logger.error(f"Error sending welcome email to {user.email}: {str(e)}")
+        email_status = "error"
+    
     return {
         "id": new_user.id,
         "username": new_user.username,
         "email": new_user.email,
         "is_active": new_user.is_active,
         "api_key": api_key,
-        "created_at": new_user.created_at
+        "created_at": new_user.created_at,
+        "email_status": email_status
     }
 
 @app.get("/api/admin/users/")
@@ -1493,3 +1522,752 @@ async def demo_translate(
             status_code=500,
             detail=f"Demo translation failed: {str(e)}"
         )
+
+# Add email configuration after your other configurations
+EMAIL_HOST = os.getenv("EMAIL_HOST", "polytransai.com")
+EMAIL_PORT = int(os.getenv("EMAIL_PORT", "465"))
+EMAIL_USERNAME = os.getenv("EMAIL_USERNAME", "apimgmt-donotreply@polytransai.com")
+EMAIL_PASSWORD = os.getenv("EMAIL_PASSWORD")
+EMAIL_USE_TLS = os.getenv("EMAIL_USE_TLS", "true").lower() == "true"
+FROM_EMAIL = os.getenv("FROM_EMAIL", "apimgmt-donotreply@polytransai.com")
+FROM_NAME = os.getenv("FROM_NAME", "PolyTransAI")
+
+async def send_email(to_email: str, subject: str, html_content: str, text_content: str = None):
+    """
+    Send email using SMTP with SSL
+    """
+    try:
+        # Create message
+        msg = EmailMessage()
+        msg['Subject'] = subject
+        msg['From'] = f"{FROM_NAME} <{FROM_EMAIL}>"
+        msg['To'] = to_email
+        
+        # Set content
+        if text_content:
+            msg.set_content(text_content)
+        
+        # Add HTML content
+        msg.add_alternative(html_content, subtype='html')
+        
+        # Since you're using port 465, use SSL
+        if EMAIL_PORT == 465:
+            # SSL connection
+            context = ssl.create_default_context()
+            with smtplib.SMTP_SSL(EMAIL_HOST, EMAIL_PORT, context=context) as server:
+                if EMAIL_PASSWORD:
+                    server.login(EMAIL_USERNAME, EMAIL_PASSWORD)
+                server.send_message(msg)
+        else:
+            # TLS connection (port 587)
+            with smtplib.SMTP(EMAIL_HOST, EMAIL_PORT) as server:
+                if EMAIL_USE_TLS:
+                    server.starttls()
+                if EMAIL_PASSWORD:
+                    server.login(EMAIL_USERNAME, EMAIL_PASSWORD)
+                server.send_message(msg)
+        
+        return True
+        
+    except Exception as e:
+        print(f"Failed to send email to {to_email}: {str(e)}")
+        return False
+
+def generate_welcome_email_html(username: str, api_key: str, email: str) -> str:
+    """
+    Generate welcome email HTML content
+    """
+    current_date = datetime.utcnow().strftime('%B %d, %Y at %I:%M %p UTC')
+    
+    return f"""
+    <!DOCTYPE html>
+    <html lang="en">
+    <head>
+        <meta charset="UTF-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <title>Welcome to PolyTransAI</title>
+        <style>
+            body {{
+                font-family: Arial, sans-serif;
+                line-height: 1.6;
+                color: #333;
+                max-width: 600px;
+                margin: 0 auto;
+                padding: 20px;
+                background-color: #f4f4f4;
+            }}
+            .container {{
+                background-color: white;
+                padding: 30px;
+                border-radius: 10px;
+                box-shadow: 0 0 20px rgba(0,0,0,0.1);
+            }}
+            .header {{
+                text-align: center;
+                margin-bottom: 30px;
+                padding-bottom: 20px;
+                border-bottom: 2px solid #007bff;
+            }}
+            .logo {{
+                font-size: 28px;
+                font-weight: bold;
+                color: #007bff;
+                margin-bottom: 10px;
+            }}
+            .api-key-box {{
+                background-color: #f8f9fa;
+                border: 2px solid #007bff;
+                padding: 20px;
+                border-radius: 8px;
+                margin: 20px 0;
+                text-align: center;
+            }}
+            .api-key {{
+                font-family: 'Courier New', monospace;
+                font-size: 16px;
+                font-weight: bold;
+                color: #dc3545;
+                background-color: #fff;
+                padding: 10px;
+                border-radius: 5px;
+                border: 1px solid #ddd;
+                word-break: break-all;
+            }}
+            .warning {{
+                background-color: #fff3cd;
+                border: 1px solid #ffeaa7;
+                padding: 15px;
+                border-radius: 5px;
+                margin: 20px 0;
+            }}
+            .cta-button {{
+                display: inline-block;
+                background-color: #007bff;
+                color: white;
+                padding: 12px 30px;
+                text-decoration: none;
+                border-radius: 5px;
+                margin: 20px 10px;
+                font-weight: bold;
+            }}
+            .footer {{
+                margin-top: 40px;
+                padding-top: 20px;
+                border-top: 1px solid #ddd;
+                font-size: 14px;
+                color: #666;
+                text-align: center;
+            }}
+            .code-example {{
+                background-color: #f8f9fa;
+                border-left: 4px solid #007bff;
+                padding: 15px;
+                margin: 15px 0;
+                font-family: 'Courier New', monospace;
+                font-size: 14px;
+                overflow-x: auto;
+            }}
+        </style>
+    </head>
+    <body>
+        <div class="container">
+            <div class="header">
+                <div class="logo">🌐 PolyTransAI</div>
+                <p>AI-Powered Translation API</p>
+            </div>
+            
+            <h2>Welcome to PolyTransAI, {username}!</h2>
+            
+            <p>Thank you for joining PolyTransAI! Your account has been successfully created and you're ready to start translating content with our powerful AI-driven translation API.</p>
+            
+            <div class="api-key-box">
+                <h3>🔑 Your API Key</h3>
+                <p>Here's your unique API key. Keep it secure and never share it publicly:</p>
+                <div class="api-key">{api_key}</div>
+            </div>
+            
+            <div class="warning">
+                <strong>⚠️ Important Security Notice:</strong>
+                <ul>
+                    <li>Never share your API key publicly or commit it to version control</li>
+                    <li>Store it securely in environment variables</li>
+                    <li>If compromised, contact us immediately for a replacement</li>
+                    <li>This key is tied to your account and usage will be tracked</li>
+                </ul>
+            </div>
+            
+            <h3>🚀 Getting Started</h3>
+            <p>You can start using the API immediately! Here's a quick example:</p>
+            
+            <div class="code-example">
+curl -X POST "https://polytransai.com/translate-text/" \\<br>
+&nbsp;&nbsp;-H "X-API-Key: {api_key}" \\<br>
+&nbsp;&nbsp;-F "text=Hello world" \\<br>
+&nbsp;&nbsp;-F "source_language=english" \\<br>
+&nbsp;&nbsp;-F "target_languages=spanish"
+            </div>
+            
+            <h3>📚 What you can do:</h3>
+            <ul>
+                <li><strong>Text Translation:</strong> Translate individual texts between 9+ languages</li>
+                <li><strong>CSV Batch Processing:</strong> Upload CSV files for bulk translations</li>
+                <li><strong>Multiple Target Languages:</strong> Translate to multiple languages in one request</li>
+                <li><strong>Custom Styles:</strong> Specify translation styles (formal, casual, technical)</li>
+                <li><strong>Usage Tracking:</strong> Monitor your API usage and costs</li>
+            </ul>
+            
+            <div style="text-align: center;">
+                <a href="https://polytransai.com/docs.html" class="cta-button">📖 Read Documentation</a>
+            </div>
+            
+            <h3>🌍 Supported Languages:</h3>
+            <p>English, Spanish, Portuguese, French, German, Italian, Filipino, Japanese, Vietnamese</p>
+            
+            <h3>💡 Need Help?</h3>
+            <p>If you have any questions or need assistance:</p>
+            <ul>
+                <li>📖 Check our <a href="https://polytransai.com/docs.html">documentation</a></li>
+                <li>💬 Contact support: <a href="mailto:support@polytransai.com">support@polytransai.com</a></li>
+            </ul>
+            
+            <div class="footer">
+                <p><strong>Account Details:</strong></p>
+                <p>Username: {username}<br>
+                Email: {email}<br>
+                Account Created: {current_date}</p>
+                
+                <p style="margin-top: 20px;">
+                    Best regards,<br>
+                    The PolyTransAI Team
+                </p>
+                
+                <p style="font-size: 12px; color: #999; margin-top: 30px;">
+                    This email was sent to {email} because an account was created for you on PolyTransAI.<br>
+                    If you didn't request this account, please contact us immediately.
+                </p>
+            </div>
+        </div>
+    </body>
+    </html>
+    """
+
+def generate_welcome_email_text(username: str, api_key: str, email: str) -> str:
+    """
+    Generate welcome email text content (fallback for email clients that don't support HTML)
+    """
+    current_date = datetime.utcnow().strftime('%B %d, %Y at %I:%M %p UTC')
+    
+    return f"""
+Welcome to PolyTransAI, {username}!
+
+Thank you for joining PolyTransAI! Your account has been successfully created and you're ready to start translating content with our powerful AI-driven translation API.
+
+YOUR API KEY:
+{api_key}
+
+IMPORTANT SECURITY NOTICE:
+- Never share your API key publicly or commit it to version control
+- Store it securely in environment variables  
+- If compromised, contact us immediately for a replacement
+- This key is tied to your account and usage will be tracked
+
+GETTING STARTED:
+You can start using the API immediately! Here's a quick example:
+
+curl -X POST "https://polytransai.com/translate-text/" \\
+  -H "X-API-Key: {api_key}" \\
+  -F "text=Hello world" \\
+  -F "source_language=english" \\
+  -F "target_languages=spanish"
+
+WHAT YOU CAN DO:
+- Text Translation: Translate individual texts between 9+ languages
+- CSV Batch Processing: Upload CSV files for bulk translations  
+- Multiple Target Languages: Translate to multiple languages in one request
+- Custom Styles: Specify translation styles (formal, casual, technical)
+- Usage Tracking: Monitor your API usage and costs
+
+SUPPORTED LANGUAGES:
+English, Spanish, Portuguese, French, German, Italian, Filipino, Japanese, Vietnamese
+
+DOCUMENTATION: https://polytransai.com/docs.html
+
+NEED HELP?
+- Documentation: https://polytransai.com/docs.html
+- Support: support@polytransai.com  
+
+ACCOUNT DETAILS:
+Username: {username}
+Email: {email}
+Account Created: {current_date}
+
+Best regards,
+The PolyTransAI Team
+
+---
+This email was sent to {email} because an account was created for you on PolyTransAI.
+If you didn't request this account, please contact us immediately.
+    """
+
+# CLIENT ADMIN ENDPOINTS (API KEY REQUIRED - SELF-SERVICE)
+
+@app.get("/api/client/profile")
+async def get_client_profile(
+    db: Session = Depends(get_db),
+    api_key: str = Depends(validate_api_key)
+):
+    """
+    Get client's own profile information
+    """
+    user = db.query(User).filter(User.api_key == api_key).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="User profile not found")
+    
+    return {
+        "id": user.id,
+        "username": user.username,
+        "email": user.email,
+        "is_active": user.is_active,
+        "api_key": user.api_key,
+        "created_at": user.created_at
+    }
+
+@app.put("/api/client/profile")
+async def update_client_profile(
+    profile_update: UserUpdate,
+    db: Session = Depends(get_db),
+    api_key: str = Depends(validate_api_key)
+):
+    """
+    Update client's own profile (username and email only)
+    """
+    user = db.query(User).filter(User.api_key == api_key).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="User profile not found")
+    
+    # Update only provided fields
+    if profile_update.username is not None:
+        # Check if new username already exists
+        existing_user = db.query(User).filter(
+            User.username == profile_update.username,
+            User.id != user.id
+        ).first()
+        if existing_user:
+            raise HTTPException(status_code=400, detail="Username already exists")
+        user.username = profile_update.username
+    
+    if profile_update.email is not None:
+        # Check if new email already exists
+        existing_user = db.query(User).filter(
+            User.email == profile_update.email,
+            User.id != user.id
+        ).first()
+        if existing_user:
+            raise HTTPException(status_code=400, detail="Email already exists")
+        user.email = profile_update.email
+    
+    # Clients cannot change their own is_active status
+    
+    db.commit()
+    db.refresh(user)
+    
+    return {
+        "message": "Profile updated successfully",
+        "id": user.id,
+        "username": user.username,
+        "email": user.email,
+        "is_active": user.is_active,
+        "api_key": user.api_key,
+        "created_at": user.created_at
+    }
+
+@app.get("/api/client/statistics")
+async def get_client_statistics(
+    period: BillingPeriod = Query(BillingPeriod.MONTHLY),
+    start_date: Optional[str] = Query(None, description="Start date in YYYY-MM-DD format"),
+    end_date: Optional[str] = Query(None, description="End date in YYYY-MM-DD format"),
+    db: Session = Depends(get_db),
+    api_key: str = Depends(validate_api_key)
+):
+    """
+    Get client's own usage statistics
+    """
+    user = db.query(User).filter(User.api_key == api_key).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="User profile not found")
+    
+    # Calculate date range based on period and provided dates
+    if start_date:
+        try:
+            period_start = datetime.strptime(start_date, "%Y-%m-%d")
+            
+            if end_date:
+                # Use exact date range if both dates provided
+                period_end = datetime.strptime(end_date, "%Y-%m-%d")
+            else:
+                # Calculate end date based on period from start date
+                if period == BillingPeriod.MONTHLY:
+                    period_end = period_start + relativedelta(months=1)
+                elif period == BillingPeriod.QUARTERLY:
+                    period_end = period_start + relativedelta(months=3)
+                else:  # ANNUALLY
+                    period_end = period_start + relativedelta(years=1)
+                    
+        except ValueError:
+            raise HTTPException(
+                status_code=400, 
+                detail="Invalid date format. Use YYYY-MM-DD format."
+            )
+    else:
+        # Default behavior: go backwards from current date
+        period_end = datetime.utcnow()
+        if period == BillingPeriod.MONTHLY:
+            period_start = period_end - relativedelta(months=1)
+        elif period == BillingPeriod.QUARTERLY:
+            period_start = period_end - relativedelta(months=3)
+        else:  # ANNUALLY
+            period_start = period_end - relativedelta(years=1)
+    
+    # Ensure period_start is not after period_end
+    if period_start > period_end:
+        raise HTTPException(
+            status_code=400,
+            detail="Start date cannot be after end date"
+        )
+    
+    # Get text translation statistics
+    text_stats = db.query(
+        func.count(TextEntry.id).label('total_translations'),
+        func.count(func.distinct(func.date(TextEntry.created_at))).label('active_days')
+    ).filter(
+        TextEntry.apikey_requested == api_key,
+        TextEntry.created_at >= period_start,
+        TextEntry.created_at <= period_end
+    ).first()
+    
+    # Get detailed text translation metrics
+    text_translations = db.query(TextEntry).filter(
+        TextEntry.apikey_requested == api_key,
+        TextEntry.created_at >= period_start,
+        TextEntry.created_at <= period_end
+    ).all()
+    
+    # Count translations by language
+    language_counts = {}
+    total_characters_translated = 0
+    
+    for text_entry in text_translations:
+        translations = db.query(Translation).filter(
+            Translation.text_entry_id == text_entry.id
+        ).all()
+        
+        for trans in translations:
+            lang = trans.language
+            if lang not in language_counts:
+                language_counts[lang] = 0
+            language_counts[lang] += 1
+            total_characters_translated += len(trans.translated_text)
+    
+    # Get CSV translation statistics
+    csv_stats = db.query(
+        func.count(TranslationRequest.id).label('total_csv_translations'),
+        func.sum(TranslationRequest.cost).label('total_cost'),
+        func.avg(TranslationRequest.cost).label('avg_cost_per_csv')
+    ).filter(
+        TranslationRequest.apikey_requested == api_key,
+        TranslationRequest.created_at >= period_start,
+        TranslationRequest.created_at <= period_end
+    ).first()
+    
+    # Get CSV details for analysis
+    csv_translations = db.query(TranslationRequest).filter(
+        TranslationRequest.apikey_requested == api_key,
+        TranslationRequest.created_at >= period_start,
+        TranslationRequest.created_at <= period_end
+    ).all()
+    
+    # Calculate CSV metrics
+    csv_rows_processed = 0
+    csv_languages_used = set()
+    
+    for csv_trans in csv_translations:
+        # Estimate rows from CSV data
+        if csv_trans.csv_file:
+            csv_content = csv_trans.csv_file.decode('utf-8')
+            csv_rows_processed += len(csv_content.split('\n')) - 1  # Subtract header
+        
+        # Count unique target languages
+        target_langs = csv_trans.target_languages.split(',')
+        csv_languages_used.update(target_langs)
+    
+    # Calculate usage patterns
+    daily_usage = {}
+    for text_entry in text_translations:
+        date_key = text_entry.created_at.strftime('%Y-%m-%d')
+        if date_key not in daily_usage:
+            daily_usage[date_key] = 0
+        daily_usage[date_key] += 1
+    
+    for csv_trans in csv_translations:
+        date_key = csv_trans.created_at.strftime('%Y-%m-%d')
+        if date_key not in daily_usage:
+            daily_usage[date_key] = 0
+        daily_usage[date_key] += 1
+    
+    # Calculate peak usage
+    peak_day_usage = max(daily_usage.values()) if daily_usage else 0
+    avg_daily_usage = sum(daily_usage.values()) / len(daily_usage) if daily_usage else 0
+    
+    # Calculate the actual period length in days
+    actual_period_days = (period_end - period_start).days
+    
+    return {
+        "user_id": user.id,
+        "username": user.username,
+        "email": user.email,
+        "period": period.value,
+        "period_start": period_start.isoformat(),
+        "period_end": period_end.isoformat(),
+        "actual_period_days": actual_period_days,
+        "text_translations": {
+            "total_translations": text_stats.total_translations or 0,
+            "total_characters": total_characters_translated,
+            "avg_characters_per_translation": total_characters_translated / (text_stats.total_translations or 1),
+            "languages_used": language_counts,
+            "unique_languages_count": len(language_counts),
+            "active_days": text_stats.active_days or 0
+        },
+        "csv_translations": {
+            "total_csv_files": csv_stats.total_csv_translations or 0,
+            "total_rows_processed": csv_rows_processed,
+            "total_cost": float(csv_stats.total_cost or 0),
+            "avg_cost_per_csv": float(csv_stats.avg_cost_per_csv or 0),
+            "languages_used": list(csv_languages_used),
+            "unique_languages_count": len(csv_languages_used)
+        },
+        "usage_patterns": {
+            "peak_day_usage": peak_day_usage,
+            "avg_daily_usage": round(avg_daily_usage, 2),
+            "total_active_days": len(daily_usage),
+            "usage_consistency": round(avg_daily_usage / peak_day_usage, 2) if peak_day_usage > 0 else 0,
+            "daily_breakdown": daily_usage
+        },
+        "totals": {
+            "total_api_calls": (text_stats.total_translations or 0) + (csv_stats.total_csv_translations or 0),
+            "total_openai_cost": float(csv_stats.total_cost or 0),
+            "estimated_text_cost": (text_stats.total_translations or 0) * 0.01  # Estimated cost per text translation
+        }
+    }
+
+@app.get("/api/client/activity")
+async def get_client_activity(
+    translation_type: str = Query("all", pattern="^(all|text|csv)$"),
+    limit: int = Query(20, le=100),
+    offset: int = Query(0, ge=0),
+    db: Session = Depends(get_db),
+    api_key: str = Depends(validate_api_key)
+):
+    """
+    Get client's recent translation activity
+    """
+    user = db.query(User).filter(User.api_key == api_key).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="User profile not found")
+    
+    activities = []
+    
+    if translation_type in ["all", "text"]:
+        # Get text translations
+        text_entries = db.query(TextEntry)\
+            .filter(TextEntry.apikey_requested == api_key)\
+            .order_by(TextEntry.created_at.desc())\
+            .offset(offset if translation_type == "text" else 0)\
+            .limit(limit if translation_type == "text" else limit//2)\
+            .all()
+        
+        for entry in text_entries:
+            # Get translations for this entry
+            translations = db.query(Translation)\
+                .filter(Translation.text_entry_id == entry.id)\
+                .all()
+            
+            activities.append({
+                "id": entry.id,
+                "type": "text",
+                "created_at": entry.created_at,
+                "languages": [t.language for t in translations],
+                "character_count": sum(len(t.translated_text) for t in translations),
+                "is_human_translation": entry.is_human_translation,
+                "translation_count": len(translations)
+            })
+    
+    if translation_type in ["all", "csv"]:
+        # Get CSV translations
+        csv_translations = db.query(TranslationRequest)\
+            .filter(TranslationRequest.apikey_requested == api_key)\
+            .order_by(TranslationRequest.created_at.desc())\
+            .offset(offset if translation_type == "csv" else 0)\
+            .limit(limit if translation_type == "csv" else limit//2)\
+            .all()
+        
+        for csv_trans in csv_translations:
+            # Estimate rows processed
+            rows_processed = 0
+            if csv_trans.csv_file:
+                csv_content = csv_trans.csv_file.decode('utf-8')
+                rows_processed = len(csv_content.split('\n')) - 1  # Subtract header
+            
+            activities.append({
+                "id": csv_trans.id,
+                "type": "csv",
+                "created_at": csv_trans.created_at,
+                "source_language": csv_trans.source_language,
+                "target_languages": csv_trans.target_languages.split(","),
+                "translation_style": csv_trans.translation_style,
+                "cost": csv_trans.cost,
+                "rows_processed": rows_processed
+            })
+    
+    # Sort by date and apply final limit
+    activities.sort(key=lambda x: x['created_at'], reverse=True)
+    activities = activities[:limit]
+    
+    return {
+        "user_id": user.id,
+        "username": user.username,
+        "activities": activities,
+        "total_returned": len(activities),
+        "filters": {
+            "type": translation_type,
+            "limit": limit,
+            "offset": offset
+        }
+    }
+
+@app.get("/api/client/usage-summary")
+async def get_client_usage_summary(
+    days: int = Query(30, le=365),
+    db: Session = Depends(get_db),
+    api_key: str = Depends(validate_api_key)
+):
+    """
+    Get client's usage summary for the last N days
+    """
+    user = db.query(User).filter(User.api_key == api_key).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="User profile not found")
+    
+    end_date = datetime.utcnow()
+    start_date = end_date - timedelta(days=days)
+    
+    # Daily text translation counts
+    daily_text_stats = db.query(
+        func.date(TextEntry.created_at).label('date'),
+        func.count(TextEntry.id).label('count')
+    ).filter(
+        TextEntry.apikey_requested == api_key,
+        TextEntry.created_at >= start_date,
+        TextEntry.created_at <= end_date
+    ).group_by(func.date(TextEntry.created_at)).all()
+    
+    # Daily CSV translation counts
+    daily_csv_stats = db.query(
+        func.date(TranslationRequest.created_at).label('date'),
+        func.count(TranslationRequest.id).label('count'),
+        func.sum(TranslationRequest.cost).label('total_cost')
+    ).filter(
+        TranslationRequest.apikey_requested == api_key,
+        TranslationRequest.created_at >= start_date,
+        TranslationRequest.created_at <= end_date
+    ).group_by(func.date(TranslationRequest.created_at)).all()
+    
+    # Combine and format the data
+    daily_usage = {}
+    
+    for stat in daily_text_stats:
+        date_str = stat.date.strftime('%Y-%m-%d')
+        daily_usage[date_str] = {
+            'date': date_str,
+            'text_translations': stat.count,
+            'csv_translations': 0,
+            'daily_cost': 0.0
+        }
+    
+    for stat in daily_csv_stats:
+        date_str = stat.date.strftime('%Y-%m-%d')
+        if date_str in daily_usage:
+            daily_usage[date_str]['csv_translations'] = stat.count
+            daily_usage[date_str]['daily_cost'] = float(stat.total_cost or 0)
+        else:
+            daily_usage[date_str] = {
+                'date': date_str,
+                'text_translations': 0,
+                'csv_translations': stat.count,
+                'daily_cost': float(stat.total_cost or 0)
+            }
+    
+    # Sort by date
+    sorted_usage = sorted(daily_usage.values(), key=lambda x: x['date'])
+    
+    # Calculate totals
+    total_text = sum(day['text_translations'] for day in sorted_usage)
+    total_csv = sum(day['csv_translations'] for day in sorted_usage)
+    total_cost = sum(day['daily_cost'] for day in sorted_usage)
+    
+    return {
+        "user_id": user.id,
+        "username": user.username,
+        "period_days": days,
+        "start_date": start_date.strftime('%Y-%m-%d'),
+        "end_date": end_date.strftime('%Y-%m-%d'),
+        "daily_usage": sorted_usage,
+        "summary": {
+            "total_text_translations": total_text,
+            "total_csv_translations": total_csv,
+            "total_api_calls": total_text + total_csv,
+            "total_costs": round(total_cost, 2),
+            "avg_daily_usage": round((total_text + total_csv) / days, 2),
+            "active_days": len(sorted_usage)
+        }
+    }
+
+@app.get("/api/client/billing-estimate")
+async def get_client_billing_estimate(
+    period: BillingPeriod = Query(BillingPeriod.MONTHLY),
+    db: Session = Depends(get_db),
+    api_key: str = Depends(validate_api_key)
+):
+    """
+    Get client's billing estimate based on usage
+    """
+    user = db.query(User).filter(User.api_key == api_key).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="User profile not found")
+    
+    # Get usage statistics for the period
+    stats_response = await get_client_statistics(
+        period=period,
+        start_date=None,
+        end_date=None,
+        db=db,
+        api_key=api_key
+    )
+    
+    # Generate billing suggestion using the same logic as admin
+    billing_analysis = await generate_billing_suggestion(stats_response, period)
+    
+    return {
+        "user_id": user.id,
+        "username": user.username,
+        "email": user.email,
+        "period": period.value,
+        "usage_summary": {
+            "total_api_calls": stats_response["totals"]["total_api_calls"],
+            "text_translations": stats_response["text_translations"]["total_translations"],
+            "csv_translations": stats_response["csv_translations"]["total_csv_files"],
+            "openai_costs": stats_response["totals"]["total_openai_cost"],
+            "characters_translated": stats_response["text_translations"]["total_characters"]
+        },
+        "billing_estimate": billing_analysis,
+        "note": "This is an estimate based on your current usage patterns. Actual billing may vary."
+    }
