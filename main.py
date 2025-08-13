@@ -1353,3 +1353,107 @@ async def get_usage_trends(
             "avg_daily_usage": sum((t['text_translations'] + t['csv_translations']) for t in sorted_trends) / len(sorted_trends) if sorted_trends else 0
         }
     }
+
+# Add this import at the top with other imports
+from fastapi import Request
+
+# Add this new endpoint after your existing translation endpoints
+@app.post("/demo-translate/")
+async def demo_translate(
+    request: Request,
+    text: str = Form(...),
+    source_language: Language = Form(...),
+    target_language: Language = Form(...),
+    db: Session = Depends(get_db)
+):
+    """
+    Demo translation endpoint - No API key required
+    Restrictions: 
+    - Only 32 characters max
+    - Only from IP: 68.65.122.132
+    - Single target language only
+    """
+    # Check IP restriction
+    client_ip = request.client.host
+    allowed_ip = "68.65.122.132"
+    
+    if client_ip != allowed_ip:
+        raise HTTPException(
+            status_code=403,
+            detail=f"Demo access restricted. Your IP: {client_ip} is not authorized."
+        )
+    
+    # Check character limit
+    if len(text) > 32:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Demo translation limited to 32 characters. Your text has {len(text)} characters."
+        )
+    
+    # Validate that source and target languages are different
+    if source_language == target_language:
+        raise HTTPException(
+            status_code=400,
+            detail="Source and target languages must be different"
+        )
+    
+    # Validate languages
+    all_languages = [lang for lang in Language]
+    if source_language not in all_languages or target_language not in all_languages:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Invalid language. Allowed languages are: {[l.value for l in all_languages]}"
+        )
+    
+    try:
+        # Build the translation prompt
+        prompt = f"Translate this text from {source_language.value} to {target_language.value}:\n{text}"
+        
+        response = openai.ChatCompletion.create(
+            model="gpt-4-turbo",
+            messages=[
+                {"role": "system", "content": "You are a professional translator. Provide only the translation, no additional text."},
+                {"role": "user", "content": prompt}
+            ],
+            max_tokens=100,  # Limit response for demo
+            temperature=0.3
+        )
+        
+        translated_text = response['choices'][0]['message']['content'].strip()
+        
+        # Log demo usage (optional - for analytics)
+        demo_log = TextEntry(
+            apikey_requested="DEMO_USER",
+            is_human_translation=False
+        )
+        db.add(demo_log)
+        db.commit()
+        db.refresh(demo_log)
+        
+        # Save the translation
+        demo_translation = Translation(
+            text_entry_id=demo_log.id,
+            language=target_language.value,
+            translated_text=translated_text,
+            style="demo",
+            model_version="gpt-4-turbo"
+        )
+        db.add(demo_translation)
+        db.commit()
+        
+        return {
+            "message": "Demo translation successful",
+            "demo": True,
+            "original_text": text,
+            "original_language": source_language.value,
+            "target_language": target_language.value,
+            "translated_text": translated_text,
+            "character_limit": "32 characters max",
+            "note": "This is a demo. Sign up for full API access with unlimited translations."
+        }
+    
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Demo translation failed: {str(e)}"
+        )
