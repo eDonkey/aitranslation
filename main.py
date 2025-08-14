@@ -44,6 +44,8 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+SOFT_LAUNCH = os.getenv("SOFT_LAUNCH")
+
 DATABASE_URL = os.getenv(
     "DATABASE_URL",
     f"postgresql://{os.getenv('DB_USER', 'default_user')}:{os.getenv('DB_PASSWORD', 'default_password')}@{os.getenv('DB_HOST', 'localhost')}:{os.getenv('DB_PORT', '5432')}/{os.getenv('DB_NAME', 'default_db')}"
@@ -166,12 +168,20 @@ def validate_api_key(x_api_key: str = Header(..., alias="X-API-Key")):
 
 # Master API Key validation
 def validate_master_key(x_api_key: str = Header(..., alias="X-API-Key")):
-    if x_api_key != MASTER_API_KEY:
-        raise HTTPException(
-            status_code=401,
-            detail="Invalid Master API Key"
-        )
-    return x_api_key
+    if SOFT_LAUNCH == "true":
+        if x_api_key != MASTER_API_KEY and x_api_key != "foundingusers":
+            raise HTTPException(
+                status_code=401,
+                detail="Invalid Master API Key"
+            )
+        return x_api_key
+    else:
+        if x_api_key != MASTER_API_KEY:
+            raise HTTPException(
+                status_code=401,
+                detail="Invalid Master API Key"
+            )
+        return x_api_key
 
 # Pydantic models
 class TextRequest(BaseModel):
